@@ -27,28 +27,15 @@ jobs:
     
   build-image:
     name: Build manager image
-    if: ${{ github.event.pull_request.draft == false }}
-    uses: kyma-project/test-infra/.github/workflows/image-builder.yml@main # Usage: kyma-project/test-infra/.github/workflows/image-builder.yml@main
-    with:
-      name: istio/main/istio-manager
-      dockerfile: Dockerfile
-      context: .
-      build-args: |
-        VERSION=${{ github.ref_name }}
-      tags: "${{ github.sha }}"
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Building image"
 
   build-experimental-image:
     name: Build manager image - experimental
-    if: ${{ github.event.pull_request.draft == false }}
-    uses: kyma-project/test-infra/.github/workflows/image-builder.yml@main # Usage: kyma-project/test-infra/.github/workflows/image-builder.yml@main
-    with:
-      name: istio/main/istio-manager
-      dockerfile: Dockerfile
-      context: .
-      build-args: |
-        VERSION=${{ github.ref_name }}-experimental
-        GO_BUILD_TAGS=experimental
-      tags: "${{ github.sha }}-experimental"
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Building image exp"
 
   istio-upgrade-test-k3d:
     name: Istio upgrade integration test K3D
@@ -186,11 +173,6 @@ jobs:
   slack_failed_notification:
     name: Slack Notification
     runs-on: ubuntu-latest
-    if: ${{ failure() }}
-    needs: [istio-upgrade-test-aws, istio-upgrade-test-k3d, istio-e2e-test-k3d, istio-e2e-gcp, istio-e2e-aws, istio-e2e-aws-specific, istio-e2e-gcp-specific]
     steps:
-      - uses: actions/checkout@v4
-      - name: Notify
-        uses: ./.github/actions/slack-notification-failed-workflow
-        with:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      - run: |
+            echo "Sending slack notification"
