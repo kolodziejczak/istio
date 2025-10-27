@@ -6,9 +6,11 @@ metadata:
   labels:
     kyma-project.io/module: istio
 spec:
-  hub: europe-docker.pkg.dev/kyma-project/prod/external/istio
+  hub: docker.io/istio
   tag: "1.27.1-distroless"
   components:
+    ztunnel:
+      enabled: true
     base:
       enabled: true
     cni:
@@ -131,6 +133,8 @@ spec:
                 topologyKey: kubernetes.io/hostname
               weight: 100
         env:
+        - name: PILOT_ENABLE_AMBIENT
+          value: "true"
         - name: PILOT_HTTP10
           value: "1"
         - name: METRIC_ROTATION_INTERVAL
@@ -181,6 +185,7 @@ spec:
         BOOTSTRAP_XDS_AGENT: "true"
         CITADEL_SELF_SIGNED_CA_RSA_KEY_SIZE: "4096"
         WORKLOAD_RSA_KEY_SIZE: "3072"
+        ISTIO_META_ENABLE_HBONE: "true"
       tracingServiceName: CANONICAL_NAME_ONLY
     defaultProviders:
       tracing: []
@@ -262,6 +267,8 @@ spec:
       enableCRDTemplates: false
       validationURL: ""
     cni:
+      ambient:
+        enabled: true
       cniBinDir: /opt/cni/bin
       cniConfDir: /etc/cni/net.d
     defaultRevision: ""

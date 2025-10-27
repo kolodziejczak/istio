@@ -1,0 +1,48 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: lubudubu-gateway
+  namespace: default
+spec:
+  gatewayClassName: istio
+  listeners:
+    - name: default
+      hostname: "*.mk-test.goats.shoot.live.k8s-hana.ondemand.com"
+      port: 80
+      protocol: HTTP
+      allowedRoutes:
+        namespaces:
+          from: All
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: http
+  namespace: default
+spec:
+  parentRefs:
+    - name: lubudubu-gateway
+      namespace: default
+  hostnames: ["httpbin.mk-test.goats.shoot.live.k8s-hana.ondemand.com"]
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: httpbin
+          port: 8000
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  labels:
+    istio.io/waypoint-for: service
+  name: waypoint
+  namespace: default
+spec:
+  gatewayClassName: istio-waypoint
+  listeners:
+    - name: mesh
+      port: 15008
+      protocol: HBONE
