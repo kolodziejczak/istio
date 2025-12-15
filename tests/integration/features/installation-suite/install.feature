@@ -22,7 +22,7 @@ Feature: Installing and uninstalling Istio module
     And "pilot" has "requests" set to cpu - "100m" and memory - "512Mi"
     And "pilot" has "limits" set to cpu - "4000m" and memory - "2048Mi"
 
-  Scenario: Installation of Istio module
+  Scenario: Installation of Istio module # to chyba pojdzie sobie do configuration jednak
     Given Template value "PilotCPULimit" is set to "1200m"
     And Template value "PilotMemoryLimit" is set to "1200Mi"
     And Template value "PilotCPURequests" is set to "15m"
