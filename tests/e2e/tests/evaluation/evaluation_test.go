@@ -23,7 +23,7 @@ import (
 //go:embed istio_cr_default.yaml
 var IstioDefault string
 
-// CHANGE THE ORDER OF ASSERTIONS!!!
+//TODO: CHECK THE ORDER OF ASSERTIONS!!!
 func TestEvaluationProfile(t *testing.T) {
 	t.Run("Installation of Istio Module with evaluation profile", func(t *testing.T) {
 		// given
