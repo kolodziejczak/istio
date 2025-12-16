@@ -7,7 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/virtual_service"
+	infrahelpers "github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/infrastructure"
 
 	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/namespace"
 
@@ -21,6 +21,9 @@ import (
 
 //go:embed istio_cr_default.yaml
 var IstioCR string
+
+//go:embed virtual_service.yaml
+var VirtualService string
 
 func TestObservability(t *testing.T) {
 
@@ -38,16 +41,27 @@ func TestObservability(t *testing.T) {
 		err = namespace.LabelNamespaceWithIstioInjection(t, "default")
 		require.NoError(t, err)
 
-		_, _, err = httpbin.DeployHttpbin(t, "default")
+		httpbinSvcName, httpbinPort, err := httpbin.DeployHttpbin(t, "default")
 		require.NoError(t, err)
 
 		// create gateway
 		err = extauth.CreateHTTPGateway(t)
 		require.NoError(t, err)
 
-		//create vs
-		err = virtual_service.CreateVirtualService(t, "httpbin", "default")
-		require.NoError(t, err)
+		// when
+		createdVS, err := infrahelpers.CreateResourceWithTemplateValues(
+			t,
+			VirtualService,
+			map[string]any{
+				"Name":            "BOGDAN",
+				"HostName":        "*",
+				"DestinationHost": httpbinSvcName,
+				"DestinationPort": httpbinPort,
+				"GatewayName":     "kyma-system/kyma-gateway",
+			},
+		)
+		require.NoError(t, err, "Failed to create VirtualService resource")
+		require.NotEmpty(t, createdVS, "Created VirtualService resource should not be empty")
 
 		println("TERAZ IDZ I SPRAWDZ")
 		time.Sleep(100 * time.Second)
