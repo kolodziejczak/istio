@@ -31,8 +31,8 @@ func TestEvaluationProfile(t *testing.T) {
 		cfg, err := config.GetConfig()
 		require.NoError(t, err)
 		c, err := client.New(cfg, client.Options{})
-
 		require.NoError(t, err)
+
 		cs, err := clusterconfig.EvaluateClusterSize(t.Context(), c)
 		require.NoError(t, err)
 		require.Equal(t, clusterconfig.Evaluation.String(), cs.String())
