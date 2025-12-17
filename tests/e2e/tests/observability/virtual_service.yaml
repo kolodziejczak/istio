@@ -6,7 +6,7 @@ spec:
   gateways:
     - {{ .GatewayName }}
   hosts:
-    - {{ .HostName }}
+    - "{{ .HostName }}"
   http:
     - match:
         - uri:
