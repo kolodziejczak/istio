@@ -129,6 +129,50 @@ func TestObservability(t *testing.T) {
 				require.Containsf(t, string(logs), entry, "Log entry %s not found in logs from pod %s", entry, pod.Name)
 			}
 		}
+	})
+
+	t.Run("Istio calls OpenTelemetry API on default service configured in kyma-traces extension provider", func(t *testing.T) {
+		_, err := client.ResourcesClient(t)
+		require.NoError(t, err)
+
+		require.NoError(
+			t,
+			modulehelpers.CreateIstioOperatorCR(t,
+				modulehelpers.WithIstioOperatorTemplate(IstioCR),
+			),
+		)
+
+		err = telemetry.EnableTraces(t)
+		require.NoError(t, err)
+
+		err = namespace.LabelNamespaceWithIstioInjection(t, "default")
+		require.NoError(t, err)
+
+		httpbinSvcName, httpbinPort, err := httpbin.DeployHttpbin(t, "default")
+		require.NoError(t, err)
+
+		// create gateway
+		err = extauth.CreateHTTPGateway(t)
+		require.NoError(t, err)
+
+		// when
+		createdVS, err := infrahelpers.CreateResourceWithTemplateValues(
+			t,
+			VirtualService,
+			map[string]any{
+				"Name":            "httpbin",
+				"HostName":        "httpbin.local.kyma.dev",
+				"DestinationHost": httpbinSvcName,
+				"DestinationPort": httpbinPort,
+				"GatewayName":     "kyma-system/kyma-gateway",
+			},
+			decoder.MutateNamespace("default"),
+		)
+		require.NoError(t, err, "Failed to create VirtualService resource")
+		require.NotEmpty(t, createdVS, "Created VirtualService resource should not be empty")
+
+		err = telemetry.CreateOtelMockCollector(t)
+		require.NoError(t, err)
 
 	})
 }
