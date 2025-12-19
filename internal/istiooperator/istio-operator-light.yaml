@@ -116,6 +116,7 @@ spec:
     istiodRemote:
       enabled: false
     pilot:
+      image: "heheheiwuaddghiuasgd:latest"
       enabled: true
       k8s:
         affinity:

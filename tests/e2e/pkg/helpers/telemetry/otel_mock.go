@@ -22,7 +22,7 @@ func CreateOtelMockCollector(t *testing.T) error {
 		return err
 	}
 	exposedPort := 4317
-	namespace := "istio-system"
+	namespace := "kyma-system"
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "otel-collector-mock",

@@ -3,6 +3,7 @@ package observability
 import (
 	"context"
 	_ "embed"
+	"strings"
 	"testing"
 	"time"
 
@@ -132,7 +133,7 @@ func TestObservability(t *testing.T) {
 	})
 
 	t.Run("Istio calls OpenTelemetry API on default service configured in kyma-traces extension provider", func(t *testing.T) {
-		_, err := client.ResourcesClient(t)
+		c, err := client.ResourcesClient(t)
 		require.NoError(t, err)
 
 		require.NoError(
@@ -174,5 +175,40 @@ func TestObservability(t *testing.T) {
 		err = telemetry.CreateOtelMockCollector(t)
 		require.NoError(t, err)
 
+		err = wait.For(func(ctx context.Context) (done bool, err error) {
+			t.Logf("Waiting for endpoint to return 200 OK")
+
+			httpClient := httphelper.NewHTTPClient(t, httphelper.WithPrefix("observability-test"))
+			_, err = httpClient.Get("http://httpbin.local.kyma.dev/headers")
+
+			if err != nil {
+				return false, nil
+			}
+			return true, nil
+
+		}, wait.WithTimeout(10*time.Second), wait.WithInterval(1*time.Second))
+
+		time.Sleep(100 * time.Second)
+
+		otelCollectorMockPods := v1.PodList{}
+		err = c.List(t.Context(), &otelCollectorMockPods, resources.WithLabelSelector("app=otel-collector-mock"))
+		require.NoError(t, err)
+		err = wait.For(func(ctx context.Context) (done bool, err error) {
+			t.Logf("Waiting for logs to appear in the otel-collector-mock")
+
+			for _, pod := range otelCollectorMockPods.Items {
+				logs, err := log.GetLogsFromPodContainer(t, pod.Name, pod.Namespace, "otel-collector-mock")
+				println(string(logs))
+				if err != nil {
+					t.Logf("Failed to get logs from pod container: %v", err)
+					return false, err
+				}
+				if !strings.Contains(string(logs), "POST /opentelemetry.proto.collector.trace.v1.TraceService/Export") {
+					t.Logf("Log entry %s not found in logs from pod %s", string(logs), pod.Name)
+					return false, nil
+				}
+			}
+			return true, nil
+		}, wait.WithTimeout(10*time.Second), wait.WithInterval(1*time.Second))
 	})
 }
