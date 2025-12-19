@@ -39,3 +39,25 @@ func GetLogsFromIstioProxy(t *testing.T, podName, podNamespace string) ([]byte, 
 
 	return logs, nil
 }
+
+func GetLogsFromPodContainer(t *testing.T, podName, podNamespace, containerName string) ([]byte, error) {
+	t.Helper()
+	config := client.GetKubeConfig(t)
+	k8sClient, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		t.Logf("Failed to create k8s client: %v", err)
+		return nil, err
+	}
+
+	req := k8sClient.CoreV1().Pods(podNamespace).GetLogs(podName, &v1.PodLogOptions{
+		Container: containerName,
+	})
+
+	logs, err := req.DoRaw(t.Context())
+	if err != nil {
+		t.Logf("Failed to get logs from container %s of Pod %s: %v", containerName, podName, err)
+		return nil, err
+	}
+
+	return logs, nil
+}
