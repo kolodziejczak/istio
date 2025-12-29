@@ -166,6 +166,7 @@ func TestMeshCommunication(t *testing.T) {
 			return true, nil
 		})
 	})
+
 	t.Run("Namespace with istio-injection=disabled label does not contain pods with istio sidecar", func(t *testing.T) {
 		c, err := client.ResourcesClient(t)
 		require.NoError(
@@ -189,8 +190,66 @@ func TestMeshCommunication(t *testing.T) {
 		err = c.List(t.Context(), httpbinPodList, resources.WithLabelSelector("app=httpbin"))
 		require.NoError(t, err)
 		for _, pod := range httpbinPodList.Items {
-			for _, container := range pod.Spec.Containers {
+			for _, container := range pod.Spec.InitContainers {
 				require.NotEqual(t, "istio-proxy", container.Name, "Found istio-proxy sidecar in pod %s", pod.Name)
+			}
+		}
+	})
+
+	t.Run("Namespace with istio-injection=enabled label does contain pods with istio sidecar", func(t *testing.T) {
+		c, err := client.ResourcesClient(t)
+		require.NoError(
+			t,
+			modulehelpers.CreateIstioOperatorCR(t,
+				modulehelpers.WithIstioOperatorTemplate(IstioCR),
+			),
+		)
+
+		err = infrastructure.CreateNamespace(
+			t,
+			"sidecar-enabled",
+			infrastructure.WithSidecarInjectionEnabled(),
+		)
+		require.NoError(t, err)
+
+		_, _, err = httpbin.DeployHttpbin(t, "sidecar-enabled")
+		require.NoError(t, err)
+
+		httpbinPodList := &v1.PodList{}
+		err = c.List(t.Context(), httpbinPodList, resources.WithLabelSelector("app=httpbin"))
+		require.NoError(t, err)
+		for _, pod := range httpbinPodList.Items {
+			contain := false
+			for _, container := range pod.Spec.InitContainers {
+				println("XDDDD: ", container.Name)
+				if container.Name == "istio-proxy" {
+					contain = true
+				}
+			}
+			require.True(t, contain)
+		}
+	})
+
+	t.Run("Kube-system namespace does not contain pods with sidecar", func(t *testing.T) {
+		c, err := client.ResourcesClient(t)
+		require.NoError(
+			t,
+			modulehelpers.CreateIstioOperatorCR(t,
+				modulehelpers.WithIstioOperatorTemplate(IstioCR),
+			),
+		)
+
+		_, _, err = httpbin.DeployHttpbin(t, "kube-system")
+		require.NoError(t, err)
+
+		httpbinPodList := &v1.PodList{}
+		err = c.List(t.Context(), httpbinPodList, resources.WithLabelSelector("app=httpbin"))
+		require.NoError(t, err)
+		for _, pod := range httpbinPodList.Items {
+			if pod.Namespace == "kube-system" {
+				for _, container := range pod.Spec.InitContainers {
+					require.NotEqual(t, "istio-proxy", container.Name)
+				}
 			}
 		}
 	})
