@@ -9,8 +9,12 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	v1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/e2e-framework/klient/decoder"
+	"sigs.k8s.io/e2e-framework/klient/k8s/resources"
 	"sigs.k8s.io/e2e-framework/klient/wait"
+
+	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/client"
 
 	httphelper "github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/http"
 
@@ -161,6 +165,33 @@ func TestMeshCommunication(t *testing.T) {
 
 			return true, nil
 		})
+	})
+	t.Run("Namespace with istio-injection=disabled label does not contain pods with istio sidecar", func(t *testing.T) {
+		c, err := client.ResourcesClient(t)
+		require.NoError(
+			t,
+			modulehelpers.CreateIstioOperatorCR(t,
+				modulehelpers.WithIstioOperatorTemplate(IstioCR),
+			),
+		)
 
+		err = infrastructure.CreateNamespace(
+			t,
+			"sidecar-disabled",
+			infrastructure.WithSidecarInjectionDisabled(),
+		)
+		require.NoError(t, err)
+
+		_, _, err = httpbin.DeployHttpbin(t, "sidecar-disabled")
+		require.NoError(t, err)
+
+		httpbinPodList := &v1.PodList{}
+		err = c.List(t.Context(), httpbinPodList, resources.WithLabelSelector("app=httpbin"))
+		require.NoError(t, err)
+		for _, pod := range httpbinPodList.Items {
+			for _, container := range pod.Spec.Containers {
+				require.NotEqual(t, "istio-proxy", container.Name, "Found istio-proxy sidecar in pod %s", pod.Name)
+			}
+		}
 	})
 }

@@ -1,8 +1,9 @@
 package infrastructure
 
 import (
-	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/client"
 	"testing"
+
+	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/client"
 
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 
@@ -35,6 +36,15 @@ func WithSidecarInjectionEnabled() NamespaceOption {
 			opts.Labels = make(map[string]string)
 		}
 		opts.Labels["istio-injection"] = "enabled"
+	}
+}
+
+func WithSidecarInjectionDisabled() NamespaceOption {
+	return func(opts *NamespaceOptions) {
+		if opts.Labels == nil {
+			opts.Labels = make(map[string]string)
+		}
+		opts.Labels["istio-injection"] = "disabled"
 	}
 }
 
