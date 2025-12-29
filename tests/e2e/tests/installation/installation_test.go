@@ -11,7 +11,12 @@ import (
 	"gopkg.in/inf.v0"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"sigs.k8s.io/controller-runtime/pkg/client/config"
 	"sigs.k8s.io/e2e-framework/klient/k8s/resources"
+
+	crclient "sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/kyma-project/istio/operator/tests/integration/pkg/crds"
 
 	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/client"
 	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/httpbin"
@@ -108,8 +113,8 @@ func TestInstallation(t *testing.T) {
 		}
 	})
 	t.Run("Installation of Istio module with custom values", func(t *testing.T) {
-		//c, err := client.ResourcesClient(t)
-		//require.NoError(t, err)
+		c, err := client.ResourcesClient(t)
+		require.NoError(t, err)
 
 		require.NoError(
 			t,
@@ -134,6 +139,16 @@ func TestInstallation(t *testing.T) {
 		)
 
 		// check if CRDS are in the cluster
+		// create new kubernetes client.Client from "sigs.k8s.io/controller-runtime/pkg/client"
+		cfg, err := config.GetConfig()
+		require.NoError(t, err)
+		c2, err := crclient.New(cfg, crclient.Options{})
+		require.NoError(t, err)
+
+		crdLister, err := crds.NewCRDListerFromFile(c2, "istio_crd_list.yaml")
+		require.NoError(t, err)
+		_, err = crdLister.CheckForCRDs(t.Context(), true)
+		require.NoError(t, err)
 
 	})
 }
