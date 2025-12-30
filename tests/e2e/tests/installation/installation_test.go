@@ -14,6 +14,7 @@ import (
 	v2 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 	"sigs.k8s.io/e2e-framework/klient/decoder"
@@ -383,6 +384,98 @@ func TestInstallation(t *testing.T) {
 
 			return false
 		}))
+	})
+	t.Run("Istio module resources are reconciled, when they are deleted manually", func(t *testing.T) {
+		c, err := client.ResourcesClient(t)
+		require.NoError(t, err)
+
+		icr, err := infrastructure.CreateResource(
+			t,
+			IstioDefault,
+		)
+		require.NoError(t, err)
+
+		istioCR := &v1alpha2.Istio{}
+		err = c.Get(t.Context(), icr.GetName(), icr.GetNamespace(), istioCR)
+		require.NoError(t, err)
+		err = wait.For(conditions.New(c).ResourceMatch(istioCR, func(object k8s.Object) bool {
+			istio := object.(*v1alpha2.Istio)
+			if istio.Status.State == v1alpha2.Ready {
+				return true
+			}
+			return false
+		}))
+		require.NoError(t, err)
+
+		err = c.Delete(t.Context(), &v2.Deployment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "istiod",
+				Namespace: "istio-system",
+			},
+		})
+		require.NoError(t, err)
+
+		err = c.Delete(t.Context(), &v2.Deployment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "istio-ingressgateway",
+				Namespace: "istio-system",
+			},
+		})
+		require.NoError(t, err)
+
+		err = c.Delete(t.Context(), &v2.DaemonSet{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "istio-cni-node",
+				Namespace: "istio-system",
+			},
+		})
+		require.NoError(t, err)
+
+		err = c.Delete(t.Context(), &v3.PeerAuthentication{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "default",
+				Namespace: "istio-system",
+			},
+		})
+		require.NoError(t, err)
+		// check if the peer authentication from above is really removed
+
+		istioCR = &v1alpha2.Istio{}
+		err = c.Get(t.Context(), icr.GetName(), icr.GetNamespace(), istioCR)
+		require.NoError(t, err)
+		if istioCR.Annotations == nil {
+			istioCR.Annotations = make(map[string]string)
+		}
+		istioCR.Annotations["trigger-restart"] = "true"
+		err = c.Update(t.Context(), istioCR)
+		require.NoError(t, err)
+
+		// wait for the above IstioCR to get status Ready
+		err = wait.For(conditions.New(c).ResourceMatch(istioCR, func(object k8s.Object) bool {
+			istio := object.(*v1alpha2.Istio)
+			if istio.Status.State == v1alpha2.Ready {
+				return true
+			}
+			return false
+		}))
+
+		// check if the resources are recreated by the operator
+		istiodDeployment := &v2.Deployment{}
+		err = c.Get(t.Context(), "istiod", "istio-system", istiodDeployment)
+		require.NoError(t, err)
+
+		ingressDeployment := &v2.Deployment{}
+		err = c.Get(t.Context(), "istio-ingressgateway", "istio-system", ingressDeployment)
+		require.NoError(t, err)
+
+		cniDaemonSet := &v2.DaemonSet{}
+		err = c.Get(t.Context(), "istio-cni-node", "istio-system", cniDaemonSet)
+		require.NoError(t, err)
+
+		pa := v3.PeerAuthentication{}
+		err = c.Get(t.Context(), "default", "istio-system", &pa)
+		require.NoError(t, err)
+
 	})
 
 }
