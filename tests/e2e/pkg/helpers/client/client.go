@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"istio.io/client-go/pkg/apis/networking/v1alpha3"
+	v1 "istio.io/client-go/pkg/apis/security/v1"
 	"istio.io/client-go/pkg/apis/security/v1beta1"
 	telemetryv1 "istio.io/client-go/pkg/apis/telemetry/v1"
 	"k8s.io/client-go/kubernetes"
@@ -63,7 +64,13 @@ func ResourcesClient(t *testing.T) (*resources.Resources, error) {
 
 		err = telemetryv1.AddToScheme(r.GetScheme())
 		if err != nil {
-			t.Logf("Failed to add telemetryv1 scheme: %v", err)
+			t.Logf("Failed to add Istio telemetry v1 scheme: %v", err)
+			return nil, err
+		}
+
+		err = v1.AddToScheme(r.GetScheme())
+		if err != nil {
+			t.Logf("Failed to add Istio security v1 scheme: %v", err)
 			return nil, err
 		}
 

@@ -3,20 +3,28 @@ package installation
 import (
 	_ "embed"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	"gopkg.in/inf.v0"
+	v3 "istio.io/client-go/pkg/apis/security/v1"
 	v2 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
+	"sigs.k8s.io/e2e-framework/klient/decoder"
+	"sigs.k8s.io/e2e-framework/klient/k8s"
 	"sigs.k8s.io/e2e-framework/klient/k8s/resources"
 	"sigs.k8s.io/e2e-framework/klient/wait"
 	"sigs.k8s.io/e2e-framework/klient/wait/conditions"
+
+	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/infrastructure"
+
+	"github.com/kyma-project/istio/operator/api/v1alpha2"
 
 	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/client"
 	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/httpbin"
@@ -31,6 +39,9 @@ var IstioDefault string
 
 //go:embed istio_cr_custom_resources.yaml
 var IstioCustomResources string
+
+//go:embed istio_cr_custom_name_namespace.yaml
+var IstioCustomNameNamespace string
 
 func TestInstallation(t *testing.T) {
 	t.Run("Installation of Istio module with default values", func(t *testing.T) {
@@ -246,6 +257,134 @@ func TestInstallation(t *testing.T) {
 			require.NoError(t, err)
 		}
 	})
+
+	t.Run("Managed Istio resources are present", func(t *testing.T) {
+		ov := os.Getenv("OPERATOR_VERSION")
+		if ov == "" {
+			ov = "dev"
+		}
+
+		c, err := client.ResourcesClient(t)
+		require.NoError(t, err)
+
+		require.NoError(
+			t,
+			modulehelpers.CreateIstioOperatorCR(t,
+				modulehelpers.WithIstioOperatorTemplate(IstioDefault),
+			),
+		)
+
+		pa := v3.PeerAuthentication{}
+		err = c.Get(t.Context(), "default", "istio-system", &pa)
+		require.NoError(t, err)
+
+		v, ok := pa.Labels["app.kubernetes.io/version"]
+		require.True(t, ok, "Missing app.kubernetes.io/version label on PeerAuthentication")
+		require.Equal(t, ov, v)
+	})
+
+	t.Run("Installation of Istio module with Istio CR in different namespace", func(t *testing.T) {
+		c, err := client.ResourcesClient(t)
+		require.NoError(t, err)
+
+		icr, err := infrastructure.CreateResourceWithTemplateValues(
+			t,
+			IstioDefault,
+			map[string]any{},
+			decoder.MutateNamespace("default"),
+		)
+
+		require.NoError(t, err)
+
+		istioCR := &v1alpha2.Istio{}
+		err = c.Get(t.Context(), icr.GetName(), icr.GetNamespace(), istioCR)
+		require.NoError(t, err)
+
+		err = wait.For(conditions.New(c).ResourceMatch(istioCR, func(object k8s.Object) bool {
+			istio := object.(*v1alpha2.Istio)
+			ensureConditions := func() bool {
+				for _, condition := range *istio.Status.Conditions {
+					if condition.Type == string(v1alpha2.ConditionTypeReady) &&
+						condition.Reason == string(v1alpha2.ConditionReasonReconcileFailed) &&
+						condition.Status == "False" {
+						return true
+					}
+				}
+				return false
+			}
+			if istio.Status.State == v1alpha2.Error &&
+				strings.Contains(istio.Status.Description, "Stopped Istio CR reconciliation: istio CR is not in kyma-system namespace") &&
+				strings.Contains(istio.Status.Description, "Will not reconcile automatically") &&
+				ensureConditions() {
+				return true
+			}
+			return false
+		}))
+
+	})
+
+	t.Run("Installation of Istio module with a second Istio CR in kyma-system namespace", func(t *testing.T) {
+		c, err := client.ResourcesClient(t)
+		require.NoError(t, err)
+
+		icr, err := infrastructure.CreateResourceWithTemplateValues(
+			t,
+			IstioCustomNameNamespace,
+			map[string]any{
+				"Name":      "default",
+				"Namespace": "kyma-system",
+			},
+		)
+		require.NoError(t, err)
+
+		istioCR := &v1alpha2.Istio{}
+		err = c.Get(t.Context(), icr.GetName(), icr.GetNamespace(), istioCR)
+		require.NoError(t, err)
+		err = wait.For(conditions.New(c).ResourceMatch(istioCR, func(object k8s.Object) bool {
+			istio := object.(*v1alpha2.Istio)
+			if istio.Status.State == v1alpha2.Ready {
+				return true
+			}
+			return false
+		}))
+
+		icr2, err := infrastructure.CreateResourceWithTemplateValues(
+			t,
+			IstioCustomNameNamespace,
+			map[string]any{
+				"Name":      "second-istio-cr",
+				"Namespace": "kyma-system",
+			},
+		)
+		require.NoError(t, err)
+
+		secondIstioCR := &v1alpha2.Istio{}
+		err = c.Get(t.Context(), icr2.GetName(), icr2.GetNamespace(), secondIstioCR)
+		require.NoError(t, err)
+		err = wait.For(conditions.New(c).ResourceMatch(secondIstioCR, func(object k8s.Object) bool {
+			istio := object.(*v1alpha2.Istio)
+			ensureConditions := func() bool {
+				for _, condition := range *istio.Status.Conditions {
+					if condition.Type == string(v1alpha2.ConditionTypeReady) &&
+						condition.Reason == string(v1alpha2.ConditionReasonOlderCRExists) &&
+						condition.Status == "False" {
+						return true
+					}
+				}
+				return false
+			}
+
+			if istio.Status.State == v1alpha2.Warning &&
+				strings.Contains(istio.Status.Description, "Stopped Istio CR reconciliation: only Istio CR default in kyma-system reconciles the module") &&
+				strings.Contains(istio.Status.Description, "Will not reconcile automatically") &&
+				ensureConditions() {
+				return true
+			}
+
+			return false
+		}))
+	})
+
 }
 
 type resourceStruct struct {
