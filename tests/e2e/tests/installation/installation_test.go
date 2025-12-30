@@ -11,18 +11,16 @@ import (
 	"gopkg.in/inf.v0"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 	"sigs.k8s.io/e2e-framework/klient/k8s/resources"
 
-	crclient "sigs.k8s.io/controller-runtime/pkg/client"
-
-	"github.com/kyma-project/istio/operator/tests/integration/pkg/crds"
-
 	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/client"
 	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/httpbin"
+	modulehelpers "github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/modules"
 	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/namespace"
 
-	modulehelpers "github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/modules"
+	"github.com/kyma-project/istio/operator/tests/integration/pkg/crds"
 )
 
 //go:embed istio_cr_default.yaml
@@ -113,8 +111,8 @@ func TestInstallation(t *testing.T) {
 		}
 	})
 	t.Run("Installation of Istio module with custom values", func(t *testing.T) {
-		c, err := client.ResourcesClient(t)
-		require.NoError(t, err)
+		//c, err := client.ResourcesClient(t)
+		//require.NoError(t, err)
 
 		require.NoError(
 			t,
@@ -147,7 +145,7 @@ func TestInstallation(t *testing.T) {
 
 		crdLister, err := crds.NewCRDListerFromFile(c2, "istio_crd_list.yaml")
 		require.NoError(t, err)
-		_, err = crdLister.CheckForCRDs(t.Context(), true)
+		err = crdLister.EnsureCRDsArePresent(t.Context())
 		require.NoError(t, err)
 
 	})
