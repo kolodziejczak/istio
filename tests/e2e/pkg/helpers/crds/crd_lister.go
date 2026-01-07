@@ -2,9 +2,11 @@ package crds
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 
-	k8serrors "k8s.io/apimachinery/pkg/api/errors"
+	k8sErrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -33,10 +35,8 @@ func NewCRDListerFromFile(k8sClient client.Client, path string) (*CRDLister, err
 	return &lister, nil
 }
 
-// CheckForCRDs checks whether lister CRDs are present on cluster, returns list of CRDs that don't are present / are not present
-// in context of shouldHave parameter
-func (lister *CRDLister) CheckForCRDs(ctx context.Context, shouldHave bool) ([]string, error) {
-	var wrong []string
+func (lister *CRDLister) checkCrdsExist(ctx context.Context) error {
+	var missing []string
 	for _, kind := range lister.CRDList {
 		var u unstructured.Unstructured
 		u.SetGroupVersionKind(schema.GroupVersionKind{
@@ -46,15 +46,20 @@ func (lister *CRDLister) CheckForCRDs(ctx context.Context, shouldHave bool) ([]s
 		})
 
 		err := lister.k8sClient.Get(ctx, types.NamespacedName{Name: kind}, &u)
-		if k8serrors.IsNotFound(err) {
-			if shouldHave {
-				wrong = append(wrong, kind)
+
+		if err != nil {
+			if !k8sErrors.IsNotFound(err) {
+				return err
 			}
-		} else if err != nil {
-			return nil, err
-		} else if err == nil && !shouldHave {
-			wrong = append(wrong, kind)
+			missing = append(missing, kind)
 		}
+
 	}
-	return wrong, nil
+
+	if len(missing) > 0 {
+		err := fmt.Errorf("missing CRDs: %v", missing)
+		return errors.Join(crdMissingError, err)
+	}
+
+	return nil
 }
