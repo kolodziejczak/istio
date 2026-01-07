@@ -1,7 +1,6 @@
 package upgrade
 
 import (
-	"fmt"
 	"testing"
 	"time"
 
@@ -9,7 +8,6 @@ import (
 	v1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/e2e-framework/klient/k8s/resources"
 
-	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/domain"
 	extauth "github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/gateway"
 	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/virtual_service"
 
@@ -42,9 +40,6 @@ func TestUpgrade(t *testing.T) {
 		err = namespace.LabelNamespaceWithIstioInjection(t, "default")
 		require.NoError(t, err)
 
-		d, err := domain.GetClusterDomain(t.Context(), c.GetControllerRuntimeClient())
-		require.NoError(t, err)
-
 		httpbinSvcName, _, err := httpbin.DeployHttpbin(t, "default")
 		require.NoError(t, err)
 		httpbinRegularSidecarSvcName, _, err := httpbin.DeployHttpbinWithRegularSidecar(t, "default")
@@ -58,7 +53,7 @@ func TestUpgrade(t *testing.T) {
 			"httpbin-vs",
 			"default",
 			"httpbin.default.svc.cluster.local",
-			[]string{fmt.Sprintf("%s.%s", httpbinSvcName, d)},
+			[]string{httpbinSvcName},
 			[]string{"kyma-system/kyma-gateway"},
 		)
 		require.NoError(t, err)
@@ -68,7 +63,7 @@ func TestUpgrade(t *testing.T) {
 			"httpbin-vs-regular-sidecar",
 			"default",
 			"httpbin-regular-sidecar.default.svc.cluster.local",
-			[]string{fmt.Sprintf("%s.%s", httpbinRegularSidecarSvcName, d)},
+			[]string{httpbinRegularSidecarSvcName},
 			[]string{"kyma-system/kyma-gateway"},
 		)
 		require.NoError(t, err)

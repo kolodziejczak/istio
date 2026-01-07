@@ -8,6 +8,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+// TODO: remove if unused
 func GetClusterDomain(ctx context.Context, c client.Client) (string, error) {
 	gcm := v1.ConfigMap{}
 
