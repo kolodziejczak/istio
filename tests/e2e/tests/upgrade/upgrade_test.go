@@ -3,6 +3,7 @@ package upgrade
 import (
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	v1 "k8s.io/api/core/v1"
@@ -57,17 +58,17 @@ func TestUpgrade(t *testing.T) {
 			"httpbin-vs",
 			"default",
 			"httpbin.default.svc.cluster.local",
-			[]string{"httpbin.default.svc.cluster.local"},
+			[]string{fmt.Sprintf("%s.%s", httpbinSvcName, d)},
 			[]string{"kyma-system/kyma-gateway"},
 		)
 		require.NoError(t, err)
 
 		err = virtual_service.CreateVirtualService(
 			t,
-			"httpbin-vs",
+			"httpbin-vs-regular-sidecar",
 			"default",
-			"httpbin.default.svc.cluster.local",
-			[]string{fmt.Sprintf("%s.%s", httpbinSvcName, d)},
+			"httpbin-regular-sidecar.default.svc.cluster.local",
+			[]string{fmt.Sprintf("%s.%s", httpbinRegularSidecarSvcName, d)},
 			[]string{"kyma-system/kyma-gateway"},
 		)
 		require.NoError(t, err)
@@ -89,6 +90,9 @@ func TestUpgrade(t *testing.T) {
 			err = sidecar.VerifyIfPodHasIstioSidecar(&pod)
 			require.NoError(t, err)
 		}
+
+		println("GOGO")
+		time.Sleep(200 * time.Second)
 
 	})
 
