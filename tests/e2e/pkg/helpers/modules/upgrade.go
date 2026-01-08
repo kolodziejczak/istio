@@ -1,22 +1,24 @@
 package modules
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"os"
 	"time"
 
+	yaml3 "gopkg.in/yaml.v3"
 	v1 "k8s.io/api/apps/v1"
 	v1c "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-
-	"github.com/kyma-project/istio/operator/tests/integration/pkg/manifestprocessor"
 )
 
 func UpgradeIstioModule(ctx context.Context, k8sClient client.Client) error {
-	resources, err := manifestprocessor.ParseYamlFromFile("operator_generated_manifest.yaml")
+	resources, err := parseYamlFromFile("operator_generated_manifest.yaml")
 	if err != nil {
 		return err
 	}
@@ -49,7 +51,7 @@ func UpgradeIstioModule(ctx context.Context, k8sClient client.Client) error {
 	}
 
 	// Wait for the deployment to be ready
-	err = wait.PollUntilContextTimeout(ctx, 2*time.Second, 5*time.Minute, true, func(ctx context.Context) (bool, error) {
+	err = wait.PollUntilContextTimeout(ctx, 5*time.Second, 5*time.Minute, true, func(ctx context.Context) (bool, error) {
 		var controller v1.Deployment
 		err := k8sClient.Get(ctx, client.ObjectKey{
 			Namespace: "kyma-system",
@@ -99,4 +101,25 @@ func UpgradeIstioModule(ctx context.Context, k8sClient client.Client) error {
 		}
 	}
 	return nil
+}
+
+func parseYamlFromFile(fileName string) ([]unstructured.Unstructured, error) {
+	rawData, err := os.ReadFile(fileName)
+	if err != nil {
+		return nil, err
+	}
+
+	var manifests []unstructured.Unstructured
+	decoder := yaml3.NewDecoder(bytes.NewBufferString(string(rawData)))
+	for {
+		var d map[string]interface{}
+		if err := decoder.Decode(&d); err != nil {
+			if err == io.EOF {
+				break
+			}
+			return nil, fmt.Errorf("document decode failed: %w", err)
+		}
+		manifests = append(manifests, unstructured.Unstructured{Object: d})
+	}
+	return manifests, nil
 }

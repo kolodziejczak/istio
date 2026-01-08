@@ -5,6 +5,7 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 images:
 - name: controller
-  newName: op-skr-registry.localhost:8888/unsigned/operator-images/istio-operator
+  newName: marekkolodziejczak955/istio-manager
+  newTag: 0.0.1
 patches:
 - path: env-images.yaml

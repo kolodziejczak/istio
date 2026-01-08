@@ -6915,7 +6915,7 @@ spec:
           value: europe-docker.pkg.dev/kyma-project/prod/external/istio/ztunnel:1.27.4-distroless
         - name: GODEBUG
           value: fips140=only,tlsmlkem=0
-        image: op-skr-registry.localhost:8888/unsigned/operator-images/istio-operator:latest
+        image: marekkolodziejczak955/istio-manager:0.0.1
         livenessProbe:
           httpGet:
             path: /healthz
