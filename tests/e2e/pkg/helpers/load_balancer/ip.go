@@ -2,13 +2,14 @@ package load_balancer
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -27,25 +28,41 @@ func GetLoadBalancerIP(ctx context.Context, c client.Client) (string, error) {
 	}
 
 	if runsOnGardener {
-		svc := corev1.Service{}
-		if err := c.Get(ctx, istioIngressGatewayNamespaceName, &svc); err != nil {
+		var svc corev1.Service
+
+		// Wait for the LoadBalancer to be provisioned (up to 5 minutes)
+		err := wait.PollUntilContextTimeout(ctx, 5*time.Second, 5*time.Minute, true, func(ctx context.Context) (bool, error) {
+			if err := c.Get(ctx, istioIngressGatewayNamespaceName, &svc); err != nil {
+				if k8serrors.IsNotFound(err) {
+					return false, nil
+				}
+				return false, err
+			}
+
+			if len(svc.Status.LoadBalancer.Ingress) > 0 {
+				ingress := svc.Status.LoadBalancer.Ingress[0]
+				if ingress.IP != "" || ingress.Hostname != "" {
+					return true, nil
+				}
+			}
+
+			return false, nil
+		})
+
+		if err != nil {
+			return "", fmt.Errorf("failed to wait for LoadBalancer to be provisioned: %w", err)
+		}
+
+		lbIp, err := getLoadBalancerIp(svc.Status.LoadBalancer.Ingress[0])
+		if err != nil {
 			return "", err
 		}
 
-		if len(svc.Status.LoadBalancer.Ingress) == 0 {
-			return "", errors.New("no ingress ip found")
-		} else {
-			lbIp, err := getLoadBalancerIp(svc.Status.LoadBalancer.Ingress[0])
-			if err != nil {
-				return "", err
-			}
+		ingressIp = lbIp.String()
 
-			ingressIp = lbIp.String()
-
-			for _, port := range svc.Spec.Ports {
-				if port.Name == "http2" {
-					ingressPort = port.Port
-				}
+		for _, port := range svc.Spec.Ports {
+			if port.Name == "http2" {
+				ingressPort = port.Port
 			}
 		}
 	} else {

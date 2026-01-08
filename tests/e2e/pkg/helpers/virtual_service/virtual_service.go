@@ -35,8 +35,8 @@ func CreateVirtualService(t *testing.T, name, namespace, dstService string, host
 					Match: []*alpha3.HTTPMatchRequest{
 						{
 							Uri: &alpha3.StringMatch{
-								MatchType: &alpha3.StringMatch_Exact{
-									Exact: "/",
+								MatchType: &alpha3.StringMatch_Prefix{
+									Prefix: "/",
 								},
 							},
 						},

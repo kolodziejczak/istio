@@ -1,24 +1,26 @@
 package upgrade
 
 import (
+	"context"
+	"fmt"
 	"testing"
-	"time"
 
+	httphelper "github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/http"
+	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/load_balancer"
 	"github.com/stretchr/testify/require"
 	v1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/e2e-framework/klient/k8s/resources"
-
-	extauth "github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/gateway"
-	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/virtual_service"
+	"sigs.k8s.io/e2e-framework/klient/wait"
 
 	"github.com/kyma-project/istio/operator/api/v1alpha2"
+	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/client"
 	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/crds"
+	extauth "github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/gateway"
 	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/httpbin"
 	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/modules"
 	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/namespace"
 	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/sidecar"
-
-	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/client"
+	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/virtual_service"
 )
 
 func TestUpgrade(t *testing.T) {
@@ -52,8 +54,8 @@ func TestUpgrade(t *testing.T) {
 			t,
 			"httpbin-vs",
 			"default",
-			"httpbin.default.svc.cluster.local",
-			[]string{httpbinSvcName},
+			httpbinSvcName,
+			[]string{"httpbin.default.local.kyma.dev"},
 			[]string{"kyma-system/kyma-gateway"},
 		)
 		require.NoError(t, err)
@@ -62,8 +64,8 @@ func TestUpgrade(t *testing.T) {
 			t,
 			"httpbin-vs-regular-sidecar",
 			"default",
-			"httpbin-regular-sidecar.default.svc.cluster.local",
-			[]string{httpbinRegularSidecarSvcName},
+			httpbinRegularSidecarSvcName,
+			[]string{"httpbin-regular-sidecar.default.local.kyma.dev"},
 			[]string{"kyma-system/kyma-gateway"},
 		)
 		require.NoError(t, err)
@@ -86,8 +88,29 @@ func TestUpgrade(t *testing.T) {
 			require.NoError(t, err)
 		}
 
-		println("GOGO")
-		time.Sleep(200 * time.Second)
+		lbIp, err := load_balancer.GetLoadBalancerIP(t.Context(), c.GetControllerRuntimeClient())
+		require.NoError(t, err)
+
+		t.Logf("LoadBalancer IP: %s", lbIp)
+
+		err = wait.For(func(ctx context.Context) (done bool, err error) {
+			t.Logf("Waiting for endpoint to return 200 OK")
+			httpClient := httphelper.NewHTTPClient(t,
+				httphelper.WithPrefix("upgrade-test"),
+				httphelper.WithHost("httpbin.default.local.kyma.dev"),
+			)
+
+			resp, err := httpClient.Get(fmt.Sprintf("http://%s/headers", lbIp))
+			if err != nil {
+				return false, nil
+			}
+			if resp.StatusCode != 200 {
+				t.Logf("Endpoint status code %d", resp.StatusCode)
+				return false, nil
+			}
+
+			return true, nil
+		})
 
 	})
 
