@@ -5,14 +5,15 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/cucumber/godog"
 	corev1 "k8s.io/api/core/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/kyma-project/istio/operator/tests/integration/pkg/ip"
-	"github.com/kyma-project/istio/operator/tests/integration/testsupport"
 
 	"log"
 	"net/http"
@@ -28,7 +29,7 @@ const numberOfThreads = 5
 // so then the FinishZeroDowntimeTests function knows which Testers to stop
 // Every test scenario instance should have own copy of this structure to allow parallel execution of tests
 type ZeroDowntimeTestRunner struct {
-	testers []testsupport.Tester
+	testers []Tester
 }
 
 func getClient() *http.Client {
@@ -72,7 +73,7 @@ func (zd *ZeroDowntimeTestRunner) StartZeroDowntimeTest(ctx context.Context, c c
 		return doSingleRequest(client, host, path, lbUrl)
 	}
 
-	tester := testsupport.NewTester(fmt.Sprintf("host-%s", host), testFn, numberOfThreads)
+	tester := NewTester(fmt.Sprintf("host-%s", host), testFn, numberOfThreads)
 	zd.testers = append(zd.testers, tester)
 
 	log.Printf("Starting zero downtime tester %s", tester.Name())
@@ -121,7 +122,7 @@ func fetchIstioIngressGatewayAddress(ctx context.Context, c client.Client) (stri
 	var ingressIp string
 	var ingressPort int32
 
-	runsOnGardener, err := testsupport.RunsOnGardener(ctx, c)
+	runsOnGardener, err := RunsOnGardener(ctx, c)
 	if err != nil {
 		return "", err
 	}
@@ -155,4 +156,119 @@ func fetchIstioIngressGatewayAddress(ctx context.Context, c client.Client) (stri
 	}
 
 	return fmt.Sprintf("%s:%d", ingressIp, ingressPort), nil
+}
+
+type Tester interface {
+	Name() string
+	Start()
+	Stop() []TestResult
+}
+
+func NewTester(name string, testFn func() error, numberOfThreads int) Tester {
+	return &tester{
+		name:            name,
+		testFn:          testFn,
+		numberOfWorkers: numberOfThreads,
+	}
+}
+
+type TestResult struct {
+	WorkerName string
+	TestCount  int
+	Err        error
+}
+
+type tester struct {
+	name            string
+	testFn          func() error
+	numberOfWorkers int
+	resultChans     []chan TestResult
+	cancel          func()
+	waitGroup       *sync.WaitGroup
+}
+
+type worker struct {
+	name       string
+	test       func() error
+	testCount  int
+	err        error
+	resultChan chan TestResult
+}
+
+func (w *worker) doWorkInBackground(ctx context.Context, group *sync.WaitGroup) {
+	group.Add(1)
+	go func() {
+		defer group.Done()
+		w.doWork(ctx)
+	}()
+}
+
+func (w *worker) sendResult() {
+	w.resultChan <- TestResult{
+		WorkerName: w.name,
+		TestCount:  w.testCount,
+		Err:        w.err,
+	}
+	close(w.resultChan)
+}
+
+func (w *worker) doWork(ctx context.Context) {
+	defer w.sendResult()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			w.testCount++
+			err := w.test()
+			if err != nil {
+				w.err = fmt.Errorf("test %d done by worker %s failed with error %v", w.testCount, w.name, err)
+				return
+			}
+		}
+	}
+}
+
+func (t *tester) Name() string {
+	return t.name
+}
+
+func (t *tester) Start() {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.cancel = cancel
+	t.waitGroup = &sync.WaitGroup{}
+	t.resultChans = make([]chan TestResult, t.numberOfWorkers)
+
+	for i := 0; i < t.numberOfWorkers; i++ {
+		t.resultChans[i] = make(chan TestResult, 1)
+		w := worker{
+			name:       fmt.Sprintf("%s-%d", t.name, i),
+			test:       t.testFn,
+			resultChan: t.resultChans[i],
+		}
+
+		w.doWorkInBackground(ctx, t.waitGroup)
+	}
+}
+
+func (t *tester) Stop() []TestResult {
+	results := make([]TestResult, 0)
+	t.cancel()
+	t.waitGroup.Wait()
+	for _, resultChan := range t.resultChans {
+		result := <-resultChan
+		results = append(results, result)
+	}
+	return results
+}
+
+func RunsOnGardener(ctx context.Context, k8sClient client.Client) (bool, error) {
+	cmShootInfo := corev1.ConfigMap{}
+	err := k8sClient.Get(ctx, types.NamespacedName{Namespace: "kube-system", Name: "shoot-info"}, &cmShootInfo)
+
+	if k8serrors.IsNotFound(err) {
+		return false, nil
+	}
+
+	return true, err
 }
