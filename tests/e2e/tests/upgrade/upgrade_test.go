@@ -7,6 +7,7 @@ import (
 
 	httphelper "github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/http"
 	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/load_balancer"
+	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/zero_downtime"
 	"github.com/stretchr/testify/require"
 	v1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/e2e-framework/klient/k8s/resources"
@@ -111,6 +112,29 @@ func TestUpgrade(t *testing.T) {
 
 			return true, nil
 		})
+		require.NoError(t, err)
+
+		// Start zero downtime testing for both httpbin endpoints
+		t.Log("Starting zero downtime tests")
+		zeroDowntimeRunner := &zero_downtime.ZeroDowntimeTestRunner{}
+
+		_, err = zeroDowntimeRunner.StartZeroDowntimeTest(t.Context(), c.GetControllerRuntimeClient(), "httpbin.default.local.kyma.dev", "/headers")
+		require.NoError(t, err)
+
+		_, err = zeroDowntimeRunner.StartZeroDowntimeTest(t.Context(), c.GetControllerRuntimeClient(), "httpbin-regular-sidecar.default.local.kyma.dev", "/headers")
+		require.NoError(t, err)
+
+		// Perform the upgrade
+		t.Log("Starting Istio module upgrade")
+		err = modules.UpgradeIstioModule(t.Context(), c.GetControllerRuntimeClient())
+		require.NoError(t, err)
+		t.Log("Istio module upgrade completed successfully")
+
+		// Stop zero downtime tests and verify no errors occurred
+		t.Log("Stopping zero downtime tests and checking for errors")
+		_, err = zeroDowntimeRunner.FinishZeroDowntimeTests(t.Context())
+		require.NoError(t, err)
+		t.Log("Zero downtime tests completed successfully - no downtime detected during upgrade")
 
 	})
 
