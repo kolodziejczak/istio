@@ -201,14 +201,14 @@ func (b *IstioCRBuilder) Build() *v1alpha2.Istio {
 }
 
 // Apply creates or updates the Istio CR in the cluster and waits for it to be ready
-func (b *IstioCRBuilder) Apply(t *testing.T) error {
+func (b *IstioCRBuilder) Apply(t *testing.T) (*v1alpha2.Istio, error) {
 	t.Helper()
 	t.Log("Applying Istio custom resource")
 
 	r, err := client.ResourcesClient(t)
 	if err != nil {
 		t.Logf("Failed to get resources client: %v", err)
-		return err
+		return nil, err
 	}
 
 	icr := b.Build()
@@ -216,27 +216,27 @@ func (b *IstioCRBuilder) Apply(t *testing.T) error {
 	err = r.Create(t.Context(), icr)
 	if err != nil {
 		t.Logf("Failed to create Istio custom resource: %v", err)
-		return err
+		return nil, err
 	}
 
 	err = waitForIstioCRReadiness(t, r, icr)
 	if err != nil {
 		t.Logf("Istio custom resource is not ready: %v", err)
-		return err
+		return nil, err
 	}
 
 	t.Log("Istio custom resource applied successfully")
-	return nil
+	return icr, nil
 }
 
 // ApplyAndCleanup applies the Istio CR and registers a cleanup function
-func (b *IstioCRBuilder) ApplyAndCleanup(t *testing.T) error {
+func (b *IstioCRBuilder) ApplyAndCleanup(t *testing.T) (*v1alpha2.Istio, error) {
 	t.Helper()
 
 	r, err := client.ResourcesClient(t)
 	if err != nil {
 		t.Logf("Failed to get resources client: %v", err)
-		return err
+		return nil, err
 	}
 
 	icr := b.Build()
@@ -244,7 +244,7 @@ func (b *IstioCRBuilder) ApplyAndCleanup(t *testing.T) error {
 	err = r.Create(t.Context(), icr)
 	if err != nil {
 		t.Logf("Failed to create Istio custom resource: %v", err)
-		return err
+		return nil, err
 	}
 
 	// Register cleanup before waiting for readiness
@@ -253,11 +253,38 @@ func (b *IstioCRBuilder) ApplyAndCleanup(t *testing.T) error {
 	err = waitForIstioCRReadiness(t, r, icr)
 	if err != nil {
 		t.Logf("Istio custom resource is not ready: %v", err)
-		return err
+		return nil, err
 	}
 
 	t.Log("Istio custom resource applied successfully with cleanup registered")
-	return nil
+	return icr, nil
+}
+
+// ApplyAndCleanupWithoutReadinessCheck applies the Istio CR and registers a cleanup function
+// but does NOT wait for the CR to become ready. Use this when you expect the CR to be in
+// Error, Warning, or other non-Ready states.
+func (b *IstioCRBuilder) ApplyAndCleanupWithoutReadinessCheck(t *testing.T) (*v1alpha2.Istio, error) {
+	t.Helper()
+
+	r, err := client.ResourcesClient(t)
+	if err != nil {
+		t.Logf("Failed to get resources client: %v", err)
+		return nil, err
+	}
+
+	icr := b.Build()
+
+	err = r.Create(t.Context(), icr)
+	if err != nil {
+		t.Logf("Failed to create Istio custom resource: %v", err)
+		return nil, err
+	}
+
+	// Register cleanup
+	registerIstioCRCleanup(t, icr)
+
+	t.Log("Istio custom resource applied successfully with cleanup registered (without readiness check)")
+	return icr, nil
 }
 
 // Update updates an existing Istio CR in the cluster
@@ -427,6 +454,18 @@ func (b *IstioCRBuilder) WithIngressGatewayResources(cpuRequests, memoryRequests
 	ingressGateway := NewIngressGatewayComponent()
 	ingressGateway.K8s.Resources = NewResources(cpuRequests, memoryRequests, cpuLimits, memoryLimits)
 	return b.WithIngressGateway(ingressGateway)
+}
+
+// WithEgressGatewayResources is a convenience method to enable egress gateway and set resources
+func (b *IstioCRBuilder) WithEgressGatewayResources(cpuRequests, memoryRequests, cpuLimits, memoryLimits string) *IstioCRBuilder {
+	enabled := true
+	egressGateway := &v1alpha2.EgressGateway{
+		Enabled: &enabled,
+		K8s: &v1alpha2.KubernetesResourcesConfig{
+			Resources: NewResources(cpuRequests, memoryRequests, cpuLimits, memoryLimits),
+		},
+	}
+	return b.WithEgressGateway(egressGateway)
 }
 
 // WithPilotHPA is a convenience method to set pilot HPA

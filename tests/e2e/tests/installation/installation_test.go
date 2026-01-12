@@ -1,7 +1,6 @@
 package installation
 
 import (
-	_ "embed"
 	"fmt"
 	"os"
 	"strconv"
@@ -15,46 +14,26 @@ import (
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	crclient "sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/config"
-	"sigs.k8s.io/e2e-framework/klient/decoder"
 	"sigs.k8s.io/e2e-framework/klient/k8s"
 	"sigs.k8s.io/e2e-framework/klient/k8s/resources"
 	"sigs.k8s.io/e2e-framework/klient/wait"
 	"sigs.k8s.io/e2e-framework/klient/wait/conditions"
 
-	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/infrastructure"
-
 	"github.com/kyma-project/istio/operator/api/v1alpha2"
-
 	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/client"
 	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/httpbin"
 	modulehelpers "github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/modules"
 	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/namespace"
-
 	"github.com/kyma-project/istio/operator/tests/integration/pkg/crds"
 )
-
-//go:embed istio_cr_default.yaml
-var IstioDefault string
-
-//go:embed istio_cr_custom_resources.yaml
-var IstioCustomResources string
-
-//go:embed istio_cr_custom_name_namespace.yaml
-var IstioCustomNameNamespace string
 
 func TestInstallation(t *testing.T) {
 	t.Run("Installation of Istio module with default values", func(t *testing.T) {
 		c, err := client.ResourcesClient(t)
 		require.NoError(t, err)
 
-		require.NoError(
-			t,
-			modulehelpers.CreateIstioOperatorCR(t,
-				modulehelpers.WithIstioOperatorTemplate(IstioDefault),
-			),
-		)
+		_, err = modulehelpers.NewIstioCRBuilder().ApplyAndCleanup(t)
+		require.NoError(t, err)
 
 		err = namespace.LabelNamespaceWithIstioInjection(t, "default")
 		require.NoError(t, err)
@@ -125,40 +104,19 @@ func TestInstallation(t *testing.T) {
 			require.NoError(t, err)
 		}
 	})
+
 	t.Run("Installation of Istio module with custom values", func(t *testing.T) {
 		c, err := client.ResourcesClient(t)
 		require.NoError(t, err)
 
-		require.NoError(
-			t,
-			modulehelpers.CreateIstioOperatorCR(t,
-				modulehelpers.WithIstioOperatorTemplate(IstioCustomResources),
-				modulehelpers.WithIstioOperatorTemplateValues(map[string]interface{}{
-					"PilotCPULimit":        "1200m",
-					"PilotMemoryLimit":     "1200Mi",
-					"PilotCPURequests":     "15m",
-					"PilotMemoryRequests":  "200Mi",
-					"IGCPULimit":           "1500m",
-					"IGMemoryLimit":        "1200Mi",
-					"IGCPURequests":        "80m",
-					"IGMemoryRequests":     "200Mi",
-					"EgressGatewayEnabled": "true",
-					"EGCPULimit":           "1400m",
-					"EGMemoryLimit":        "1100Mi",
-					"EGCPURequests":        "70m",
-					"EGMemoryRequests":     "190Mi",
-				}),
-			),
-		)
-
-		// check if CRDS are in the cluster
-		// create new kubernetes client.Client from "sigs.k8s.io/controller-runtime/pkg/client"
-		cfg, err := config.GetConfig()
-		require.NoError(t, err)
-		c2, err := crclient.New(cfg, crclient.Options{})
+		_, err = modulehelpers.NewIstioCRBuilder().
+			WithPilotResources("15m", "200Mi", "1200m", "1200Mi").
+			WithIngressGatewayResources("80m", "200Mi", "1500m", "1200Mi").
+			WithEgressGatewayResources("70m", "190Mi", "1400m", "1100Mi").
+			ApplyAndCleanup(t)
 		require.NoError(t, err)
 
-		crdLister, err := crds.NewCRDListerFromFile(c2, "istio_crd_list.yaml")
+		crdLister, err := crds.NewCRDListerFromFile(c.GetControllerRuntimeClient(), "istio_crd_list.yaml")
 		require.NoError(t, err)
 		err = crdLister.EnsureCRDsArePresent(t.Context())
 		require.NoError(t, err)
@@ -268,12 +226,8 @@ func TestInstallation(t *testing.T) {
 		c, err := client.ResourcesClient(t)
 		require.NoError(t, err)
 
-		require.NoError(
-			t,
-			modulehelpers.CreateIstioOperatorCR(t,
-				modulehelpers.WithIstioOperatorTemplate(IstioDefault),
-			),
-		)
+		_, err = modulehelpers.NewIstioCRBuilder().ApplyAndCleanup(t)
+		require.NoError(t, err)
 
 		pa := v3.PeerAuthentication{}
 		err = c.Get(t.Context(), "default", "istio-system", &pa)
@@ -288,21 +242,17 @@ func TestInstallation(t *testing.T) {
 		c, err := client.ResourcesClient(t)
 		require.NoError(t, err)
 
-		icr, err := infrastructure.CreateResourceWithTemplateValues(
-			t,
-			IstioDefault,
-			map[string]any{},
-			decoder.MutateNamespace("default"),
-		)
-
+		// Create Istio CR in 'default' namespace (not kyma-system)
+		// Use ApplyAndCleanupWithoutReadinessCheck since we expect it to be in Error state
+		istioCR, err := modulehelpers.NewIstioCRBuilder().
+			WithNamespace("default").
+			ApplyAndCleanupWithoutReadinessCheck(t)
 		require.NoError(t, err)
 
-		istioCR := &v1alpha2.Istio{}
-		err = c.Get(t.Context(), icr.GetName(), icr.GetNamespace(), istioCR)
-		require.NoError(t, err)
-
+		// Wait for the error state since it's in wrong namespace
 		err = wait.For(conditions.New(c).ResourceMatch(istioCR, func(object k8s.Object) bool {
 			istio := object.(*v1alpha2.Istio)
+
 			ensureConditions := func() bool {
 				for _, condition := range *istio.Status.Conditions {
 					if condition.Type == string(v1alpha2.ConditionTypeReady) &&
@@ -313,55 +263,33 @@ func TestInstallation(t *testing.T) {
 				}
 				return false
 			}
+
 			if istio.Status.State == v1alpha2.Error &&
 				strings.Contains(istio.Status.Description, "Stopped Istio CR reconciliation: istio CR is not in kyma-system namespace") &&
 				strings.Contains(istio.Status.Description, "Will not reconcile automatically") &&
 				ensureConditions() {
 				return true
 			}
+
 			return false
 		}))
-
+		require.NoError(t, err)
 	})
 
 	t.Run("Installation of Istio module with a second Istio CR in kyma-system namespace", func(t *testing.T) {
 		c, err := client.ResourcesClient(t)
 		require.NoError(t, err)
 
-		icr, err := infrastructure.CreateResourceWithTemplateValues(
-			t,
-			IstioCustomNameNamespace,
-			map[string]any{
-				"Name":      "default",
-				"Namespace": "kyma-system",
-			},
-		)
+		// Create first Istio CR with default name
+		_, err = modulehelpers.NewIstioCRBuilder().ApplyAndCleanup(t)
 		require.NoError(t, err)
 
-		istioCR := &v1alpha2.Istio{}
-		err = c.Get(t.Context(), icr.GetName(), icr.GetNamespace(), istioCR)
-		require.NoError(t, err)
-		err = wait.For(conditions.New(c).ResourceMatch(istioCR, func(object k8s.Object) bool {
-			istio := object.(*v1alpha2.Istio)
-			if istio.Status.State == v1alpha2.Ready {
-				return true
-			}
-			return false
-		}))
+		// Create second Istio CR in same namespace
+		secondIstioCR, err := modulehelpers.NewIstioCRBuilder().
+			WithName("second-istio-cr").
+			ApplyAndCleanupWithoutReadinessCheck(t)
 
-		icr2, err := infrastructure.CreateResourceWithTemplateValues(
-			t,
-			IstioCustomNameNamespace,
-			map[string]any{
-				"Name":      "second-istio-cr",
-				"Namespace": "kyma-system",
-			},
-		)
-		require.NoError(t, err)
-
-		secondIstioCR := &v1alpha2.Istio{}
-		err = c.Get(t.Context(), icr2.GetName(), icr2.GetNamespace(), secondIstioCR)
-		require.NoError(t, err)
+		// Wait for second CR to show warning
 		err = wait.For(conditions.New(c).ResourceMatch(secondIstioCR, func(object k8s.Object) bool {
 			istio := object.(*v1alpha2.Istio)
 			ensureConditions := func() bool {
@@ -384,27 +312,16 @@ func TestInstallation(t *testing.T) {
 
 			return false
 		}))
+		require.NoError(t, err)
 	})
+
 	t.Run("Istio module resources are reconciled, when they are deleted manually", func(t *testing.T) {
 		c, err := client.ResourcesClient(t)
 		require.NoError(t, err)
 
-		icr, err := infrastructure.CreateResource(
-			t,
-			IstioDefault,
-		)
-		require.NoError(t, err)
-
-		istioCR := &v1alpha2.Istio{}
-		err = c.Get(t.Context(), icr.GetName(), icr.GetNamespace(), istioCR)
-		require.NoError(t, err)
-		err = wait.For(conditions.New(c).ResourceMatch(istioCR, func(object k8s.Object) bool {
-			istio := object.(*v1alpha2.Istio)
-			if istio.Status.State == v1alpha2.Ready {
-				return true
-			}
-			return false
-		}))
+		// Create Istio CR
+		ib := modulehelpers.NewIstioCRBuilder()
+		_, err = ib.ApplyAndCleanup(t)
 		require.NoError(t, err)
 
 		err = c.Delete(t.Context(), &v2.Deployment{
@@ -438,26 +355,9 @@ func TestInstallation(t *testing.T) {
 			},
 		})
 		require.NoError(t, err)
-		// check if the peer authentication from above is really removed
 
-		istioCR = &v1alpha2.Istio{}
-		err = c.Get(t.Context(), icr.GetName(), icr.GetNamespace(), istioCR)
+		err = ib.WithAnnotation("trigger-restart", "true").Update(t)
 		require.NoError(t, err)
-		if istioCR.Annotations == nil {
-			istioCR.Annotations = make(map[string]string)
-		}
-		istioCR.Annotations["trigger-restart"] = "true"
-		err = c.Update(t.Context(), istioCR)
-		require.NoError(t, err)
-
-		// wait for the above IstioCR to get status Ready
-		err = wait.For(conditions.New(c).ResourceMatch(istioCR, func(object k8s.Object) bool {
-			istio := object.(*v1alpha2.Istio)
-			if istio.Status.State == v1alpha2.Ready {
-				return true
-			}
-			return false
-		}))
 
 		// check if the resources are recreated by the operator
 		istiodDeployment := &v2.Deployment{}
