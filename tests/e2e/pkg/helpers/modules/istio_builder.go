@@ -2,6 +2,7 @@ package modules
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -213,6 +214,9 @@ func (b *IstioCRBuilder) Apply(t *testing.T) (*v1alpha2.Istio, error) {
 
 	icr := b.Build()
 
+	// Log the Istio CR before applying
+	logIstioCR(t, icr)
+
 	err = r.Create(t.Context(), icr)
 	if err != nil {
 		t.Logf("Failed to create Istio custom resource: %v", err)
@@ -240,6 +244,9 @@ func (b *IstioCRBuilder) ApplyAndCleanup(t *testing.T) (*v1alpha2.Istio, error) 
 	}
 
 	icr := b.Build()
+
+	// Log the Istio CR before applying
+	logIstioCR(t, icr)
 
 	err = r.Create(t.Context(), icr)
 	if err != nil {
@@ -273,6 +280,9 @@ func (b *IstioCRBuilder) ApplyAndCleanupWithoutReadinessCheck(t *testing.T) (*v1
 	}
 
 	icr := b.Build()
+
+	// Log the Istio CR before applying
+	logIstioCR(t, icr)
 
 	err = r.Create(t.Context(), icr)
 	if err != nil {
@@ -504,6 +514,17 @@ func (b *IstioCRBuilder) WithCNIResources(cpuRequests, memoryRequests, cpuLimits
 	cni := NewCNIComponent()
 	cni.K8S.Resources = NewResources(cpuRequests, memoryRequests, cpuLimits, memoryLimits)
 	return b.WithCNI(cni)
+}
+
+// logIstioCR logs the Istio CR as JSON for debugging purposes
+func logIstioCR(t *testing.T, icr *v1alpha2.Istio) {
+	t.Helper()
+	jsonData, err := json.MarshalIndent(icr, "", "  ")
+	if err != nil {
+		t.Logf("Failed to marshal Istio CR to JSON: %v", err)
+		return
+	}
+	t.Logf("Istio CR to be applied:\n%s", string(jsonData))
 }
 
 // registerIstioCRCleanup registers a cleanup function for the Istio CR

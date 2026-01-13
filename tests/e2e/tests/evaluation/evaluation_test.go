@@ -4,12 +4,9 @@ import (
 	_ "embed"
 	"testing"
 
-	"github.com/stretchr/testify/require"
-	v1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"sigs.k8s.io/e2e-framework/klient/k8s/resources"
-
 	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/namespace"
+	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/infrastructure"
 
@@ -46,8 +43,7 @@ func TestEvaluationProfile(t *testing.T) {
 		require.NoError(t, err)
 
 		// istiod
-		istiodPodList := &v1.PodList{}
-		err = c.List(t.Context(), istiodPodList, resources.WithLabelSelector("app=istiod"))
+		istiodPodList, err := infrastructure.GetIstiodPods(t)
 		require.NoError(t, err)
 
 		for _, pod := range istiodPodList.Items {
@@ -60,8 +56,7 @@ func TestEvaluationProfile(t *testing.T) {
 		}
 
 		// istio-ingressgateway
-		igPodList := &v1.PodList{}
-		err = c.List(t.Context(), igPodList, resources.WithLabelSelector("app=istio-ingressgateway"))
+		igPodList, err := infrastructure.GetIngressGatewayPods(t)
 		require.NoError(t, err)
 
 		for _, pod := range igPodList.Items {
@@ -74,8 +69,7 @@ func TestEvaluationProfile(t *testing.T) {
 		}
 
 		// workload
-		httpbinPodList := &v1.PodList{}
-		err = c.List(t.Context(), httpbinPodList, resources.WithLabelSelector("app=httpbin"))
+		httpbinPodList, err := infrastructure.GetHttpbinPods(t)
 		require.NoError(t, err)
 
 		containerFound := false
