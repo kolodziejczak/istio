@@ -7,65 +7,39 @@ import (
 	"github.com/stretchr/testify/require"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/config"
+	"sigs.k8s.io/e2e-framework/klient/k8s/resources"
+
+	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/namespace"
+
+	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/infrastructure"
 
 	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/httpbin"
 
 	"github.com/kyma-project/istio/operator/api/v1alpha2"
 	resourceClient "github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/client"
 	modulehelpers "github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/modules"
-
-	"github.com/kyma-project/istio/operator/internal/clusterconfig"
 )
 
-//go:embed istio_cr_default.yaml
-var IstioDefault string
-
-//TODO: CHECK THE ORDER OF ASSERTIONS!!!
 func TestEvaluationProfile(t *testing.T) {
 	t.Run("Installation of Istio Module with evaluation profile", func(t *testing.T) {
-		// given
+		infrastructure.EnsureEvaluationClusterProfile(t)
 
-		cfg, err := config.GetConfig()
-		require.NoError(t, err)
-		c, err := client.New(cfg, client.Options{})
+		istioCR, err := modulehelpers.NewIstioCRBuilder().ApplyAndCleanup(t)
 		require.NoError(t, err)
 
-		cs, err := clusterconfig.EvaluateClusterSize(t.Context(), c)
+		c, err := resourceClient.ResourcesClient(t)
 		require.NoError(t, err)
-		require.Equal(t, clusterconfig.Evaluation.String(), cs.String())
 
-		require.NoError(
-			t,
-			modulehelpers.CreateIstioOperatorCR(t,
-				modulehelpers.WithIstioOperatorTemplate(IstioDefault),
-			),
-		)
+		err = c.Get(t.Context(), istioCR.Name, istioCR.Namespace, istioCR)
+		require.NoError(t, err)
 
-		istioCR := &v1alpha2.Istio{}
-		cc, err := resourceClient.ResourcesClient(t)
-		require.NoError(t, err)
-		err = cc.Get(t.Context(), "default", "kyma-system", istioCR)
-		require.NoError(t, err)
 		conditions := *istioCR.Status.Conditions
 		require.Equal(t, v1alpha2.Ready, istioCR.Status.State)
 		require.Equal(t, string(v1alpha2.ConditionReasonReconcileSucceeded), conditions[0].Reason)
 		require.Equal(t, string(v1alpha2.ConditionTypeReady), conditions[0].Type)
 		require.Equal(t, metav1.ConditionTrue, conditions[0].Status)
 
-		ns := &v1.Namespace{}
-
-		err = c.Get(t.Context(), client.ObjectKey{Name: "default"}, ns)
-		require.NoError(t, err)
-		cc.Label(ns, map[string]string{
-			"istio-injection": "enabled",
-		})
-		err = cc.Update(t.Context(), ns)
-		require.NoError(t, err)
-
-		err = c.Get(t.Context(), client.ObjectKey{Name: "default"}, ns)
+		err = namespace.LabelNamespaceWithIstioInjection(t, "default")
 		require.NoError(t, err)
 
 		_, _, err = httpbin.DeployHttpbin(t, "default")
@@ -73,13 +47,7 @@ func TestEvaluationProfile(t *testing.T) {
 
 		// istiod
 		istiodPodList := &v1.PodList{}
-		podListOpts := &client.ListOptions{
-			Namespace: "istio-system",
-			LabelSelector: labels.SelectorFromSet(map[string]string{
-				"app": "istiod",
-			}),
-		}
-		err = c.List(t.Context(), istiodPodList, podListOpts)
+		err = c.List(t.Context(), istiodPodList, resources.WithLabelSelector("app=istiod"))
 		require.NoError(t, err)
 
 		for _, pod := range istiodPodList.Items {
@@ -93,13 +61,7 @@ func TestEvaluationProfile(t *testing.T) {
 
 		// istio-ingressgateway
 		igPodList := &v1.PodList{}
-		podListOpts = &client.ListOptions{
-			Namespace: "istio-system",
-			LabelSelector: labels.SelectorFromSet(map[string]string{
-				"app": "istio-ingressgateway",
-			}),
-		}
-		err = c.List(t.Context(), igPodList, podListOpts)
+		err = c.List(t.Context(), igPodList, resources.WithLabelSelector("app=istio-ingressgateway"))
 		require.NoError(t, err)
 
 		for _, pod := range igPodList.Items {
@@ -111,31 +73,25 @@ func TestEvaluationProfile(t *testing.T) {
 			}
 		}
 
-	// workload
-	httpbinPodList := &v1.PodList{}
-	podListOpts = &client.ListOptions{
-		Namespace: "default",
-		LabelSelector: labels.SelectorFromSet(map[string]string{
-			"app": "httpbin",
-		}),
-	}
-	err = c.List(t.Context(), httpbinPodList, podListOpts)
-	require.NoError(t, err)
+		// workload
+		httpbinPodList := &v1.PodList{}
+		err = c.List(t.Context(), httpbinPodList, resources.WithLabelSelector("app=httpbin"))
+		require.NoError(t, err)
 
-	containerFound := false
-	for _, pod := range httpbinPodList.Items {
-		for _, container := range pod.Spec.InitContainers {
-			if container.Name == "istio-proxy" {
-				containerFound = true
-				require.Equal(t, "10m", container.Resources.Requests.Cpu().String())
-				require.Equal(t, "32Mi", container.Resources.Requests.Memory().String())
-				require.Equal(t, "250m", container.Resources.Limits.Cpu().String())
-				require.Equal(t, "254Mi", container.Resources.Limits.Memory().String())
-				break
+		containerFound := false
+		for _, pod := range httpbinPodList.Items {
+			for _, container := range pod.Spec.InitContainers {
+				if container.Name == "istio-proxy" {
+					containerFound = true
+					require.Equal(t, "10m", container.Resources.Requests.Cpu().String())
+					require.Equal(t, "32Mi", container.Resources.Requests.Memory().String())
+					require.Equal(t, "250m", container.Resources.Limits.Cpu().String())
+					require.Equal(t, "254Mi", container.Resources.Limits.Memory().String())
+					break
+				}
 			}
 		}
-	}
-	require.True(t, containerFound)
+		require.True(t, containerFound)
 
 	})
 }
