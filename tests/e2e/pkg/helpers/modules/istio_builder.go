@@ -308,15 +308,48 @@ func (b *IstioCRBuilder) Update(t *testing.T) error {
 		return err
 	}
 
-	icr := b.Build()
+	// Build the desired Istio CR with updates
+	desiredIcr := b.Build()
 
-	err = r.Update(t.Context(), icr)
+	// First, get the existing Istio CR from the cluster to obtain the resourceVersion
+	existingIcr := &v1alpha2.Istio{}
+	err = r.Get(t.Context(), desiredIcr.Name, desiredIcr.Namespace, existingIcr)
+	if err != nil {
+		t.Logf("Failed to get existing Istio custom resource: %v", err)
+		return err
+	}
+
+	// Copy the desired spec to the existing CR (preserving resourceVersion and other metadata)
+	existingIcr.Spec = desiredIcr.Spec
+
+	// Copy any annotations or labels that were set
+	if desiredIcr.Annotations != nil {
+		if existingIcr.Annotations == nil {
+			existingIcr.Annotations = make(map[string]string)
+		}
+		for k, v := range desiredIcr.Annotations {
+			existingIcr.Annotations[k] = v
+		}
+	}
+	if desiredIcr.Labels != nil {
+		if existingIcr.Labels == nil {
+			existingIcr.Labels = make(map[string]string)
+		}
+		for k, v := range desiredIcr.Labels {
+			existingIcr.Labels[k] = v
+		}
+	}
+
+	// Log the Istio CR before updating
+	logIstioCR(t, existingIcr)
+
+	err = r.Update(t.Context(), existingIcr)
 	if err != nil {
 		t.Logf("Failed to update Istio custom resource: %v", err)
 		return err
 	}
 
-	err = waitForIstioCRReadiness(t, r, icr)
+	err = waitForIstioCRReadiness(t, r, existingIcr)
 	if err != nil {
 		t.Logf("Istio custom resource is not ready after update: %v", err)
 		return err
