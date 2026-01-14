@@ -75,16 +75,13 @@ func GetLogsFromPodContainer(t *testing.T, podName, podNamespace, containerName 
 func AssertContainerLogContains(t *testing.T, c *resources.Resources, deploymentName, namespace, containerName, expectedLog string) {
 	t.Helper()
 
-	// Get pods for the deployment
 	podList := &corev1.PodList{}
 	err := c.List(t.Context(), podList, resources.WithLabelSelector(fmt.Sprintf("app=%s", deploymentName)))
 	require.NoError(t, err)
 	require.NotEmpty(t, podList.Items, "No pods found for deployment %s", deploymentName)
 
-	// Get logs from the first pod's container
 	pod := podList.Items[0]
 
-	// Use wait.For to retry log checks as logs may not be immediately available
 	err = wait.For(func(ctx context.Context) (done bool, err error) {
 		logs, err := GetLogsFromPodContainer(t, pod.Name, namespace, containerName)
 		if err != nil {
@@ -97,7 +94,6 @@ func AssertContainerLogContains(t *testing.T, c *resources.Resources, deployment
 			return false, nil
 		}
 
-		// Check if expected log is present
 		logsStr := string(logs)
 		if !strings.Contains(logsStr, expectedLog) {
 			t.Logf("Expected log not found yet, retrying...")

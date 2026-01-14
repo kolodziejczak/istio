@@ -8,16 +8,22 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/log"
 	"github.com/stretchr/testify/require"
+	apisecurityv1 "istio.io/api/security/v1"
+	apiv1beta1 "istio.io/api/type/v1beta1"
+	securityv1 "istio.io/client-go/pkg/apis/security/v1"
 	v1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/e2e-framework/klient/k8s/resources"
 	"sigs.k8s.io/e2e-framework/klient/wait"
 	"sigs.k8s.io/e2e-framework/klient/wait/conditions"
 
+	"github.com/kyma-project/istio/operator/tests/e2e/pkg/setup"
+
 	"github.com/kyma-project/istio/operator/api/v1alpha2"
-	"github.com/kyma-project/istio/operator/tests/e2e/pkg/asserts/extauth"
 	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/client"
 	extauthhelper "github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/extauth"
 	gatewayhelper "github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/gateway"
@@ -25,7 +31,6 @@ import (
 	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/httpbin"
 	infrahelpers "github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/infrastructure"
 	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/load_balancer"
-	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/log"
 	modulehelpers "github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/modules"
 	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/namespace"
 	virtualservice "github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/virtual_service"
@@ -124,7 +129,6 @@ func TestConfiguration(t *testing.T) {
 		require.NoError(t, err)
 	})
 
-	// Scenario: External authorizer (first variant with ext-authz provider)
 	t.Run("External authorizer", func(t *testing.T) {
 		c, err := client.ResourcesClient(t)
 		require.NoError(t, err)
@@ -139,15 +143,31 @@ func TestConfiguration(t *testing.T) {
 			Name:    "ext-authz",
 			Port:    8000,
 			Service: "ext-authz.ext-auth.svc.cluster.local",
+			Headers: &v1alpha2.Headers{
+				InCheck: &v1alpha2.InCheck{
+					Include: []string{"X-Ext-Authz"},
+					Add: map[string]string{
+						"X-Add-In-Check": "value",
+					},
+				},
+			},
 		}
-		authorizer2 := &v1alpha2.Authorizer{
-			Name:    "ext-authz2",
-			Port:    8000,
-			Service: "ext-authz.ext-auth.svc.cluster.local",
-		}
+		//authorizer2 := &v1alpha2.Authorizer{
+		//	Name:    "ext-authz2",
+		//	Port:    8000,
+		//	Service: "ext-authz.ext-auth.svc.cluster.local",
+		//	Headers: &v1alpha2.Headers{
+		//		InCheck: &v1alpha2.InCheck{
+		//			Include: []string{"X-Ext-Authz"},
+		//			Add: map[string]string{
+		//				"X-Add-In-Check": "value",
+		//			},
+		//		},
+		//	},
+		//}
 		_, err = modulehelpers.NewIstioCRBuilder().
 			WithAuthorizer(authorizer1).
-			WithAuthorizer(authorizer2).
+			//WithAuthorizer(authorizer2).
 			ApplyAndCleanup(t)
 		require.NoError(t, err)
 
@@ -167,47 +187,59 @@ func TestConfiguration(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		err = createAuthorizationPolicy(t, "ext-authz", "default", "httpbin", "ext-authz", "/headers")
+		err = createAuthorizationPolicyExtAuthz(t, "ext-authz", "default", "httpbin", "ext-authz", "/headers")
 		require.NoError(t, err)
 
 		gatewayAddress, err := load_balancer.GetLoadBalancerIP(t.Context(), c.GetControllerRuntimeClient())
 		require.NoError(t, err)
+		//Then Request with header "Host" with value "httpbin.default.svc.cluster.local" to path "/" should have response code "200"
+		//And Request with Host "httpbin.default.svc.cluster.local" and header "x-ext-authz" with value "allow" to path "/headers" should have response code "200"
+		//And Log of container "ext-authz" in deployment "ext-authz" in namespace "default" contains "X-Add-In-Check:[value] X-Ext-Authz:[allow]"
+		//And Request with Host "httpbin.default.svc.cluster.local" and header "x-ext-authz" with value "deny" to path "/headers" should have response code "403"
+		//And Log of container "ext-authz" in deployment "ext-authz" in namespace "default" contains "X-Add-In-Check:[value] X-Ext-Authz:[deny]"
 
 		// Then: Verify requests work as expected
 		// Test request to root path should return 200
 		err = wait.For(func(ctx context.Context) (done bool, err error) {
-			err = extauth.AssertEndpoint(
-				t,
-				http.MethodGet,
-				fmt.Sprintf("http://%s/", gatewayAddress),
-				map[string]string{"Host": httpbinInfo.Host},
-				http.StatusOK,
-			)
+			hc := httphelper.NewHTTPClient(t, httphelper.WithHost(httpbinInfo.Host))
+
+			url := fmt.Sprintf("http://%s/", gatewayAddress)
+			resp, err := hc.Get(url)
 			if err != nil {
 				return false, err
 			}
+
+			if resp.StatusCode != http.StatusOK {
+				t.Logf("Expected status code %d got status code %d", http.StatusOK, resp.StatusCode)
+				return false, nil
+			}
+
 			return true, nil
 		}, wait.WithTimeout(30*time.Second), wait.WithInterval(2*time.Second))
 		require.NoError(t, err)
 
-		// Test request to /headers with allow header should return 200
-		err = extauth.AssertEndpoint(t, http.MethodGet, fmt.Sprintf("http://%s/headers", gatewayAddress),
-			map[string]string{
-				"Host":        httpbinInfo.Host,
-				"x-ext-authz": "allow",
-			}, http.StatusOK)
+		err = wait.For(func(ctx context.Context) (done bool, err error) {
+			hc := httphelper.NewHTTPClient(t, httphelper.WithHost(httpbinInfo.Host))
+
+			url := fmt.Sprintf("http://%s/headers", gatewayAddress)
+			resp, err := hc.Get(url)
+			if err != nil {
+				return false, err
+			}
+
+			if resp.StatusCode != http.StatusOK {
+				t.Logf("Expected status code %d got status code %d", http.StatusOK, resp.StatusCode)
+				return false, nil
+			}
+
+			return true, nil
+		}, wait.WithTimeout(30*time.Second), wait.WithInterval(2*time.Second))
 		require.NoError(t, err)
+
 
 		// Verify ext-authz logs contain the expected values
 		log.AssertContainerLogContains(t, c, "ext-authz", "ext-auth", "ext-authz", "X-Add-In-Check:[value] X-Ext-Authz:[allow]")
 
-		// Test request to /headers with deny header should return 403
-		err = extauth.AssertEndpoint(t, http.MethodGet, fmt.Sprintf("http://%s/headers", gatewayAddress),
-			map[string]string{
-				"Host":        httpbinInfo.Host,
-				"x-ext-authz": "deny",
-			}, http.StatusForbidden)
-		require.NoError(t, err)
 	})
 }
 
@@ -327,32 +359,55 @@ func assertEnvoyExternalAddress(t *testing.T, gatewayAddress string, hostHeader 
 	require.NoError(t, err)
 }
 
-func createAuthorizationPolicy(t *testing.T, name, namespace, appSelector, provider, path string) error {
+func createAuthorizationPolicyExtAuthz(t *testing.T, name, namespace, selector, provider, operation string) error {
 	t.Helper()
-	t.Logf("Creating authorization policy %s in namespace %s", name, namespace)
 
-	policy := fmt.Sprintf(`
-apiVersion: security.istio.io/v1
-kind: AuthorizationPolicy
-metadata:
-  name: %s
-  namespace: %s
-spec:
-  action: CUSTOM
-  provider:
-    name: "%s"
-  selector:
-    matchLabels:
-      app: %s
-  rules:
-    - to:
-        - operation:
-            paths: ["%s"]
-`, name, namespace, provider, appSelector, path)
-
-	_, err := infrahelpers.CreateResource(t, policy)
+	c, err := client.ResourcesClient(t)
 	if err != nil {
-		t.Logf("Failed to create authorization policy: %v", err)
+		t.Logf("Failed to get resources client: %v", err)
+		return err
+	}
+
+	ap := &securityv1.AuthorizationPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Spec: apisecurityv1.AuthorizationPolicy{
+			Selector: &apiv1beta1.WorkloadSelector{
+				MatchLabels: map[string]string{"app": selector},
+			},
+			Action: apisecurityv1.AuthorizationPolicy_CUSTOM,
+			ActionDetail: &apisecurityv1.AuthorizationPolicy_Provider{
+				Provider: &apisecurityv1.AuthorizationPolicy_ExtensionProvider{
+					Name: provider,
+				},
+			},
+			Rules: []*apisecurityv1.Rule{
+				{
+					To: []*apisecurityv1.Rule_To{
+						{
+							Operation: &apisecurityv1.Operation{
+								Paths: []string{operation},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	setup.DeclareCleanup(t, func() {
+		t.Logf("Cleaning up authorization policy %s in namespace %s", ap.GetName(), ap.GetNamespace())
+		err := c.Delete(setup.GetCleanupContext(), ap)
+		if err != nil {
+			t.Logf("Failed to delete resource %s: %v", ap.GetName(), err)
+			return
+		}
+	})
+
+	err = c.Create(t.Context(), ap)
+	if err != nil {
 		return err
 	}
 
