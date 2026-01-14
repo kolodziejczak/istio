@@ -78,11 +78,15 @@ func runsOnGardener(ctx context.Context, k8sClient client.Client) (bool, error) 
 	cmShootInfo := corev1.ConfigMap{}
 	err := k8sClient.Get(ctx, types.NamespacedName{Namespace: "kube-system", Name: "shoot-info"}, &cmShootInfo)
 
-	if k8serrors.IsNotFound(err) {
-		return false, nil
+	if err != nil {
+		if k8serrors.IsNotFound(err) {
+			return false, nil
+		}
+
+		return false, err
 	}
 
-	return true, err
+	return true, nil
 }
 
 func getLoadBalancerIp(loadBalancerIngress corev1.LoadBalancerIngress) (net.IP, error) {

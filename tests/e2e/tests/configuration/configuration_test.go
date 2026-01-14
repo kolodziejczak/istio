@@ -22,10 +22,10 @@ import (
 	gatewayhelper "github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/gateway"
 	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/httpbin"
 	infrahelpers "github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/infrastructure"
+	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/load_balancer"
 	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/log"
 	modulehelpers "github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/modules"
 	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/namespace"
-	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/portforward"
 	virtualservice "github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/virtual_service"
 )
 
@@ -51,7 +51,6 @@ func TestConfiguration(t *testing.T) {
 
 		assertProxyResourcesForDeployment(t, c, "httpbin-regular-sidecar", "default", "30m", "190Mi", "700m", "700Mi")
 
-		// When: Update Istio CR with new proxy resource values
 		err = modulehelpers.NewIstioCRBuilder().
 			WithName(istioCR.Name).
 			WithNamespace(istioCR.Namespace).
@@ -59,36 +58,25 @@ func TestConfiguration(t *testing.T) {
 			Update(t)
 		require.NoError(t, err)
 
-		// Then: Verify updated proxy resources for both deployments
 		assertProxyResourcesForDeployment(t, c, "httpbin", "default", "80m", "230Mi", "900m", "900Mi")
 		assertProxyResourcesForDeployment(t, c, "httpbin-regular-sidecar", "default", "80m", "230Mi", "900m", "900Mi")
 	})
 
-	// Scenario: Ingress Gateway adds correct X-Envoy-External-Address header after updating numTrustedProxies
-	t.Run("Ingress Gateway X-Envoy-External-Address with numTrustedProxies", func(t *testing.T) {
-		// Create Istio CR with NumTrustedProxies=1
+	t.Run("Ingress Gateway adds correct X-Envoy-External-Address header after updating numTrustedProxies", func(t *testing.T) {
+		c, err := client.ResourcesClient(t)
+		require.NoError(t, err)
+
 		istioCR, err := modulehelpers.NewIstioCRBuilder().
 			WithNumTrustedProxies(1).
 			ApplyAndCleanup(t)
 		require.NoError(t, err)
-		// Given: Create namespace and deploy httpbin
+
 		err = namespace.LabelNamespaceWithIstioInjection(t, "default")
 		require.NoError(t, err)
 
-		_, _, err = httpbin.DeployHttpbin(t, "default")
+		httpbinInfo, err := httpbin.NewBuilder().DeployWithCleanup(t)
 		require.NoError(t, err)
 
-		c, err := client.ResourcesClient(t)
-		require.NoError(t, err)
-
-		// Wait for httpbin deployment to be ready
-		httpbinDeployment := &v1.Deployment{}
-		err = c.Get(t.Context(), "httpbin", "default", httpbinDeployment)
-		require.NoError(t, err)
-		err = wait.For(conditions.New(c).DeploymentConditionMatch(httpbinDeployment, v1.DeploymentAvailable, corev1.ConditionTrue), wait.WithContext(t.Context()))
-		require.NoError(t, err)
-
-		// Create gateway and virtual service
 		err = gatewayhelper.CreateHTTPGateway(t)
 		require.NoError(t, err)
 
@@ -96,19 +84,17 @@ func TestConfiguration(t *testing.T) {
 			t,
 			"test-vs",
 			"default",
-			"httpbin.default.svc.cluster.local",
-			[]string{"httpbin.default.svc.cluster.local"},
-			[]string{"default/test-gateway"},
+			httpbinInfo.Host,
+			[]string{httpbinInfo.Host},
+			[]string{"kyma-system/kyma-gateway"},
 		)
 		require.NoError(t, err)
 
-		gatewayDomain, gatewayPort, err := portforward.CreateIngressGatewayPortForwarding(t)
+		gatewayAddress, err := load_balancer.GetLoadBalancerIP(t.Context(), c.GetControllerRuntimeClient())
 		require.NoError(t, err)
 
-		// Verify X-Envoy-External-Address with numTrustedProxies=1
-		assertEnvoyExternalAddress(t, gatewayDomain, gatewayPort, "10.2.1.1,10.0.0.1", "10.0.0.1")
+		assertEnvoyExternalAddress(t, gatewayAddress, httpbinInfo.Host, "10.2.1.1,10.0.0.1", "10.0.0.1")
 
-		// When: Update numTrustedProxies to 2
 		err = modulehelpers.NewIstioCRBuilder().
 			WithName(istioCR.Name).
 			WithNamespace(istioCR.Namespace).
@@ -116,13 +102,10 @@ func TestConfiguration(t *testing.T) {
 			Update(t)
 		require.NoError(t, err)
 
-		// Then: Verify X-Envoy-External-Address with numTrustedProxies=2
-		assertEnvoyExternalAddress(t, gatewayDomain, gatewayPort, "10.2.1.1,10.0.0.1", "10.2.1.1")
+		assertEnvoyExternalAddress(t, gatewayAddress, httpbinInfo.Host, "10.2.1.1,10.0.0.1", "10.2.1.1")
 	})
 
-	// Scenario: Egress Gateway has correct configuration
-	t.Run("Egress Gateway enabled", func(t *testing.T) {
-		// When: Create Istio CR with egress gateway enabled
+	t.Run("Egress Gateway has correct configuration", func(t *testing.T) {
 		enabled := true
 		_, err := modulehelpers.NewIstioCRBuilder().
 			WithEgressGateway(&v1alpha2.EgressGateway{
@@ -149,7 +132,7 @@ func TestConfiguration(t *testing.T) {
 		require.NoError(t, err)
 
 		// Deploy httpbin
-		_, _, err = httpbin.DeployHttpbin(t, "default")
+		httpbinInfo, err := httpbin.NewBuilder().DeployWithCleanup(t)
 		require.NoError(t, err)
 
 		c, err := client.ResourcesClient(t)
@@ -185,8 +168,8 @@ func TestConfiguration(t *testing.T) {
 			t,
 			"httpbin",
 			"default",
-			"httpbin.default.svc.cluster.local",
-			[]string{"httpbin.default.svc.cluster.local"},
+			httpbinInfo.Host,
+			[]string{httpbinInfo.Host},
 			[]string{"default/test-gateway"},
 		)
 		require.NoError(t, err)
@@ -195,7 +178,7 @@ func TestConfiguration(t *testing.T) {
 		err = createAuthorizationPolicy(t, "ext-authz", "default", "httpbin", "ext-authz", "/headers")
 		require.NoError(t, err)
 
-		gatewayDomain, gatewayPort, err := portforward.CreateIngressGatewayPortForwarding(t)
+		gatewayAddress, err := load_balancer.GetLoadBalancerIP(t.Context(), c.GetControllerRuntimeClient())
 		require.NoError(t, err)
 
 		// Then: Verify requests work as expected
@@ -204,8 +187,8 @@ func TestConfiguration(t *testing.T) {
 			err = extauth.AssertEndpoint(
 				t,
 				http.MethodGet,
-				fmt.Sprintf("http://%s:%d/", gatewayDomain, gatewayPort),
-				map[string]string{"Host": "httpbin.default.svc.cluster.local"},
+				fmt.Sprintf("http://%s/", gatewayAddress),
+				map[string]string{"Host": httpbinInfo.Host},
 				http.StatusOK,
 			)
 			if err != nil {
@@ -216,9 +199,9 @@ func TestConfiguration(t *testing.T) {
 		require.NoError(t, err)
 
 		// Test request to /headers with allow header should return 200
-		err = extauth.AssertEndpoint(t, http.MethodGet, fmt.Sprintf("http://%s:%d/headers", gatewayDomain, gatewayPort),
+		err = extauth.AssertEndpoint(t, http.MethodGet, fmt.Sprintf("http://%s/headers", gatewayAddress),
 			map[string]string{
-				"Host":        "httpbin.default.svc.cluster.local",
+				"Host":        httpbinInfo.Host,
 				"x-ext-authz": "allow",
 			}, http.StatusOK)
 		require.NoError(t, err)
@@ -227,9 +210,9 @@ func TestConfiguration(t *testing.T) {
 		log.AssertContainerLogContains(t, c, "ext-authz", "ext-auth", "ext-authz", "X-Add-In-Check:[value] X-Ext-Authz:[allow]")
 
 		// Test request to /headers with deny header should return 403
-		err = extauth.AssertEndpoint(t, http.MethodGet, fmt.Sprintf("http://%s:%d/headers", gatewayDomain, gatewayPort),
+		err = extauth.AssertEndpoint(t, http.MethodGet, fmt.Sprintf("http://%s/headers", gatewayAddress),
 			map[string]string{
-				"Host":        "httpbin.default.svc.cluster.local",
+				"Host":        httpbinInfo.Host,
 				"x-ext-authz": "deny",
 			}, http.StatusForbidden)
 		require.NoError(t, err)
@@ -242,7 +225,7 @@ func TestConfiguration(t *testing.T) {
 		require.NoError(t, err)
 
 		// Deploy httpbin
-		_, _, err = httpbin.DeployHttpbin(t, "default")
+		httpbinInfo, err := httpbin.NewBuilder().DeployWithCleanup(t)
 		require.NoError(t, err)
 
 		c, err := client.ResourcesClient(t)
@@ -278,8 +261,8 @@ func TestConfiguration(t *testing.T) {
 			t,
 			"httpbin",
 			"default",
-			"httpbin.default.svc.cluster.local",
-			[]string{"httpbin.default.svc.cluster.local"},
+			httpbinInfo.Host,
+			[]string{httpbinInfo.Host},
 			[]string{"default/test-gateway"},
 		)
 		require.NoError(t, err)
@@ -288,7 +271,7 @@ func TestConfiguration(t *testing.T) {
 		err = createAuthorizationPolicy(t, "ext-authz2", "default", "httpbin", "ext-authz2", "/headers")
 		require.NoError(t, err)
 
-		gatewayDomain, gatewayPort, err := portforward.CreateIngressGatewayPortForwarding(t)
+		gatewayAddress, err := load_balancer.GetLoadBalancerIP(t.Context(), c.GetControllerRuntimeClient())
 		require.NoError(t, err)
 
 		// Then: Verify requests work as expected
@@ -297,8 +280,8 @@ func TestConfiguration(t *testing.T) {
 			err = extauth.AssertEndpoint(
 				t,
 				http.MethodGet,
-				fmt.Sprintf("http://%s:%d/", gatewayDomain, gatewayPort),
-				map[string]string{"Host": "httpbin.default.svc.cluster.local"},
+				fmt.Sprintf("http://%s/", gatewayAddress),
+				map[string]string{"Host": httpbinInfo.Host},
 				http.StatusOK,
 			)
 			if err != nil {
@@ -309,9 +292,9 @@ func TestConfiguration(t *testing.T) {
 		require.NoError(t, err)
 
 		// Test request to /headers with allow header should return 200
-		err = extauth.AssertEndpoint(t, http.MethodGet, fmt.Sprintf("http://%s:%d/headers", gatewayDomain, gatewayPort),
+		err = extauth.AssertEndpoint(t, http.MethodGet, fmt.Sprintf("http://%s/headers", gatewayAddress),
 			map[string]string{
-				"Host":        "httpbin.default.svc.cluster.local",
+				"Host":        httpbinInfo.Host,
 				"x-ext-authz": "allow",
 			}, http.StatusOK)
 		require.NoError(t, err)
@@ -320,9 +303,9 @@ func TestConfiguration(t *testing.T) {
 		log.AssertContainerLogContains(t, c, "ext-authz", "ext-auth", "ext-authz", "X-Add-In-Check:[value] X-Ext-Authz:[allow]")
 
 		// Test request to /headers with deny header should return 403
-		err = extauth.AssertEndpoint(t, http.MethodGet, fmt.Sprintf("http://%s:%d/headers", gatewayDomain, gatewayPort),
+		err = extauth.AssertEndpoint(t, http.MethodGet, fmt.Sprintf("http://%s/headers", gatewayAddress),
 			map[string]string{
-				"Host":        "httpbin.default.svc.cluster.local",
+				"Host":        httpbinInfo.Host,
 				"x-ext-authz": "deny",
 			}, http.StatusForbidden)
 		require.NoError(t, err)
@@ -400,19 +383,19 @@ func checkResourceValues(resources corev1.ResourceRequirements, cpuRequest, memR
 }
 
 // Helper function to assert X-Envoy-External-Address header value
-func assertEnvoyExternalAddress(t *testing.T, gatewayDomain string, gatewayPort int, xForwardedFor, expectedExternalAddress string) {
+func assertEnvoyExternalAddress(t *testing.T, gatewayAddress string, hostHeader string, xForwardedFor, expectedExternalAddress string) {
 	t.Helper()
 
 	err := wait.For(func(ctx context.Context) (done bool, err error) {
-		// Make request with X-Forwarded-For header and check response for X-Envoy-External-Address
-		url := fmt.Sprintf("http://%s:%d/headers", gatewayDomain, gatewayPort)
+		url := fmt.Sprintf("http://%s/headers", gatewayAddress)
 		req, err := http.NewRequest(http.MethodGet, url, nil)
 		if err != nil {
 			return false, err
 		}
 
-		req.Header.Set("Host", "httpbin.default.svc.cluster.local")
+		req.Header.Set("Host", hostHeader)
 		req.Header.Set("X-Forwarded-For", xForwardedFor)
+		println("MAKING REUEST WITH THE FOLLOWIN HOST HEADER", req.Host)
 
 		httpClient := &http.Client{}
 		resp, err := httpClient.Do(req)
