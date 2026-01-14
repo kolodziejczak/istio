@@ -5,5 +5,4 @@ junit-report.xml
 junit-main-report.xml
 junit-upgrade-report.xml
 reports
-../e2e/operator_generated_manifest.yaml
 
