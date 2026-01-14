@@ -32,45 +32,24 @@ import (
 func TestConfiguration(t *testing.T) {
 	// Scenario: Updating proxy resource configuration
 	t.Run("Updating proxy resource configuration", func(t *testing.T) {
-		// Given: Create Istio CR with initial proxy resource values
+		c, err := client.ResourcesClient(t)
+		require.NoError(t, err)
 		istioCR, err := modulehelpers.NewIstioCRBuilder().
 			WithProxyResources("30m", "190Mi", "700m", "700Mi").
 			ApplyAndCleanup(t)
 		require.NoError(t, err)
 
-		// Label namespace with istio-injection enabled
 		err = namespace.LabelNamespaceWithIstioInjection(t, "default")
 		require.NoError(t, err)
 
-		// Deploy httpbin application with regular sidecar
-		_, _, err = httpbin.DeployHttpbin(t, "default")
+		_, err = httpbin.NewBuilder().DeployWithCleanup(t)
 		require.NoError(t, err)
 
-		// Deploy httpbin application with proxy as regular sidecar container
-		_, _, err = httpbin.DeployHttpbinWithRegularSidecar(t, "default")
+		_, err = httpbin.NewBuilder().WithName("httpbin-regular-sidecar").WithRegularSidecar().DeployWithCleanup(t)
 		require.NoError(t, err)
 
-		c, err := client.ResourcesClient(t)
-		require.NoError(t, err)
-
-		// Wait for test-app deployment to be ready
-		testAppDeployment := &v1.Deployment{}
-		err = c.Get(t.Context(), "httpbin", "default", testAppDeployment)
-		require.NoError(t, err)
-		err = wait.For(conditions.New(c).DeploymentConditionMatch(testAppDeployment, v1.DeploymentAvailable, corev1.ConditionTrue), wait.WithContext(t.Context()))
-		require.NoError(t, err)
-
-		// Wait for test-app-regular-container deployment to be ready
-		testAppRegularDeployment := &v1.Deployment{}
-		err = c.Get(t.Context(), "httpbin-regular-sidecar", "default", testAppRegularDeployment)
-		require.NoError(t, err)
-		err = wait.For(conditions.New(c).DeploymentConditionMatch(testAppRegularDeployment, v1.DeploymentAvailable, corev1.ConditionTrue), wait.WithContext(t.Context()))
-		require.NoError(t, err)
-
-		// Verify initial proxy resources for test-app
 		assertProxyResourcesForDeployment(t, c, "httpbin", "default", "30m", "190Mi", "700m", "700Mi")
 
-		// Verify initial proxy resources for test-app-regular-container
 		assertProxyResourcesForDeployment(t, c, "httpbin-regular-sidecar", "default", "30m", "190Mi", "700m", "700Mi")
 
 		// When: Update Istio CR with new proxy resource values
@@ -110,7 +89,6 @@ func TestConfiguration(t *testing.T) {
 		err = wait.For(conditions.New(c).DeploymentConditionMatch(httpbinDeployment, v1.DeploymentAvailable, corev1.ConditionTrue), wait.WithContext(t.Context()))
 		require.NoError(t, err)
 
-
 		// Create gateway and virtual service
 		err = gatewayhelper.CreateHTTPGateway(t)
 		require.NoError(t, err)
@@ -138,7 +116,6 @@ func TestConfiguration(t *testing.T) {
 			WithNumTrustedProxies(2).
 			Update(t)
 		require.NoError(t, err)
-
 
 		// Then: Verify X-Envoy-External-Address with numTrustedProxies=2
 		assertEnvoyExternalAddress(t, gatewayDomain, gatewayPort, "10.2.1.1,10.0.0.1", "10.2.1.1")
@@ -483,5 +460,3 @@ spec:
 
 	return nil
 }
-
-

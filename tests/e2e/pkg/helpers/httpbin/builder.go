@@ -19,6 +19,18 @@ import (
 //go:embed manifest_template.yaml
 var manifestTemplate string
 
+// DeploymentInfo contains information about a deployed httpbin instance
+type DeploymentInfo struct {
+	// Name is the name of the httpbin service
+	Name string
+	// Namespace is the namespace where httpbin is deployed
+	Namespace string
+	// Port is the service port
+	Port int
+	// Host is the hostname to use for requests (servicename.namespace.svc.cluster.local)
+	Host string
+}
+
 // Builder provides a fluent API for creating httpbin resources
 type Builder struct {
 	name        string
@@ -83,30 +95,35 @@ func (b *Builder) WithRegularSidecar() *Builder {
 }
 
 // DeployWithCleanup deploys the httpbin instance with the configured settings and registers a cleanup function
-func (b *Builder) DeployWithCleanup(t *testing.T) (svcName string, svcPort int, err error) {
+func (b *Builder) DeployWithCleanup(t *testing.T) (*DeploymentInfo, error) {
 	t.Helper()
 
 	if b.namespace == "" {
-		return "", 0, fmt.Errorf("namespace is required")
+		b.namespace = "default"
 	}
 
 	r, err := client.ResourcesClient(t)
 	if err != nil {
 		t.Logf("Failed to get resources client: %v", err)
-		return "", 0, fmt.Errorf("failed to get resources client: %w", err)
+		return nil, fmt.Errorf("failed to get resources client: %w", err)
 	}
 
 	manifest, err := b.generateManifest()
 	if err != nil {
-		return "", 0, fmt.Errorf("failed to generate manifest: %w", err)
+		return nil, fmt.Errorf("failed to generate manifest: %w", err)
 	}
 
 	err = b.deployWithCleanup(t, r, manifest)
 	if err != nil {
-		return "", 0, err
+		return nil, err
 	}
 
-	return b.name, 8000, nil
+	return &DeploymentInfo{
+		Name:      b.name,
+		Namespace: b.namespace,
+		Port:      8000,
+		Host:      fmt.Sprintf("%s.%s.svc.cluster.local", b.name, b.namespace),
+	}, nil
 }
 
 func (b *Builder) generateManifest() ([]byte, error) {
