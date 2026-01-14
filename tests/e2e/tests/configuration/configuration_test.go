@@ -174,15 +174,12 @@ func TestConfiguration(t *testing.T) {
 			ApplyAndCleanup(t)
 		require.NoError(t, err)
 
-		httpbinInfo, err := httpbin.NewBuilder().DeployWithCleanup(t)
-		require.NoError(t, err)
-
-		err = gatewayhelper.CreateHTTPGateway(t)
+		httpbinInfo, err := httpbin.NewBuilder().WithName("httpbin-ext-auth").DeployWithCleanup(t)
 		require.NoError(t, err)
 
 		err = virtualservice.CreateVirtualService(
 			t,
-			"httpbin",
+			"httpbin-ext-auth",
 			"default",
 			httpbinInfo.Host,
 			[]string{httpbinInfo.Host},
@@ -190,19 +187,31 @@ func TestConfiguration(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		err = createAuthorizationPolicyExtAuthz(t, "ext-authz", "default", "httpbin", "ext-authz", "/headers")
+		err = createAuthorizationPolicyExtAuthz(t, "ext-authz", "default", "httpbin-ext-auth", "ext-authz", "/headers")
+		require.NoError(t, err)
+
+		httpbin2Info, err := httpbin.NewBuilder().WithName("httpbin-ext-auth2").DeployWithCleanup(t)
+		require.NoError(t, err)
+
+		err = virtualservice.CreateVirtualService(
+			t,
+			"httpbin-ext-auth2",
+			"default",
+			httpbin2Info.Host,
+			[]string{httpbin2Info.Host},
+			[]string{"kyma-system/kyma-gateway"},
+		)
+		require.NoError(t, err)
+
+		err = gatewayhelper.CreateHTTPGateway(t)
+		require.NoError(t, err)
+
+		err = createAuthorizationPolicyExtAuthz(t, "ext-authz2", "default", "httpbin-ext-auth2", "ext-authz2", "/headers")
 		require.NoError(t, err)
 
 		gatewayAddress, err := load_balancer.GetLoadBalancerIP(t.Context(), c.GetControllerRuntimeClient())
 		require.NoError(t, err)
-		//Then Request with header "Host" with value "httpbin.default.svc.cluster.local" to path "/" should have response code "200"
-		//And Request with Host "httpbin.default.svc.cluster.local" and header "x-ext-authz" with value "allow" to path "/headers" should have response code "200"
-		//And Log of container "ext-authz" in deployment "ext-authz" in namespace "default" contains "X-Add-In-Check:[value] X-Ext-Authz:[allow]"
-		//And Request with Host "httpbin.default.svc.cluster.local" and header "x-ext-authz" with value "deny" to path "/headers" should have response code "403"
-		//And Log of container "ext-authz" in deployment "ext-authz" in namespace "default" contains "X-Add-In-Check:[value] X-Ext-Authz:[deny]"
 
-		// Then: Verify requests work as expected
-		// Test request to root path should return 200
 		err = wait.For(func(ctx context.Context) (done bool, err error) {
 			hc := httphelper.NewHTTPClient(t, httphelper.WithHost(httpbinInfo.Host))
 
@@ -262,9 +271,67 @@ func TestConfiguration(t *testing.T) {
 			return true, nil
 		}, wait.WithTimeout(30*time.Second), wait.WithInterval(2*time.Second))
 		require.NoError(t, err)
-		// Verify ext-authz logs contain the expected values
-		//log.AssertContainerLogContains(t, c, "ext-authz", "ext-auth", "ext-authz", "X-Add-In-Check:[value] X-Ext-Authz:[allow]")
 
+		// now request to httpbin-ext-auth2
+		err = wait.For(func(ctx context.Context) (done bool, err error) {
+			hc := httphelper.NewHTTPClient(t, httphelper.WithHost(httpbin2Info.Host))
+
+			url := fmt.Sprintf("http://%s/", gatewayAddress)
+			resp, err := hc.Get(url)
+			if err != nil {
+				return false, err
+			}
+
+			if resp.StatusCode != http.StatusOK {
+				t.Logf("Expected status code %d got status code %d", http.StatusOK, resp.StatusCode)
+				return false, nil
+			}
+
+			return true, nil
+		}, wait.WithTimeout(30*time.Second), wait.WithInterval(2*time.Second))
+		require.NoError(t, err)
+
+		err = wait.For(func(ctx context.Context) (done bool, err error) {
+			hc := httphelper.NewHTTPClient(t,
+				httphelper.WithHost(httpbin2Info.Host),
+				httphelper.WithHeaders(map[string]string{"x-ext-authz": "allow"}),
+			)
+
+			url := fmt.Sprintf("http://%s/headers", gatewayAddress)
+			resp, err := hc.Get(url)
+			if err != nil {
+				return false, err
+			}
+
+			if resp.StatusCode != http.StatusOK {
+				t.Logf("Expected status code %d got status code %d", http.StatusOK, resp.StatusCode)
+				return false, nil
+			}
+
+			return true, nil
+		}, wait.WithTimeout(30*time.Second), wait.WithInterval(2*time.Second))
+		require.NoError(t, err)
+
+		err = wait.For(func(ctx context.Context) (done bool, err error) {
+			hc := httphelper.NewHTTPClient(t,
+				httphelper.WithHost(httpbin2Info.Host),
+				httphelper.WithHeaders(map[string]string{"x-ext-authz": "deny"}),
+			)
+
+			url := fmt.Sprintf("http://%s/headers", gatewayAddress)
+			resp, err := hc.Get(url)
+			if err != nil {
+				return false, err
+			}
+
+			if resp.StatusCode != http.StatusForbidden {
+				t.Logf("Expected status code %d got status code %d", http.StatusOK, resp.StatusCode)
+				return false, nil
+			}
+
+			return true, nil
+		}, wait.WithTimeout(30*time.Second), wait.WithInterval(2*time.Second))
+		require.NoError(t, err)
 	})
 }
 
