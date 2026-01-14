@@ -108,21 +108,18 @@ func TestConfiguration(t *testing.T) {
 	})
 
 	t.Run("Egress Gateway has correct configuration", func(t *testing.T) {
+		c, err := client.ResourcesClient(t)
+		require.NoError(t, err)
+
 		enabled := true
-		_, err := modulehelpers.NewIstioCRBuilder().
+		_, err = modulehelpers.NewIstioCRBuilder().
 			WithEgressGateway(&v1alpha2.EgressGateway{
 				Enabled: &enabled,
 			}).
 			ApplyAndCleanup(t)
 		require.NoError(t, err)
 
-		c, err := client.ResourcesClient(t)
-		require.NoError(t, err)
-
-		// Then: Verify egress gateway deployment is ready
-		egressDeployment := &v1.Deployment{}
-		err = c.Get(t.Context(), "istio-egressgateway", "istio-system", egressDeployment)
-		require.NoError(t, err)
+		egressDeployment, err := infrahelpers.GetEgressGatewayDeployment(t)
 		err = wait.For(conditions.New(c).DeploymentConditionMatch(egressDeployment, v1.DeploymentAvailable, corev1.ConditionTrue), wait.WithContext(t.Context()))
 		require.NoError(t, err)
 	})
