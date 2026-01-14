@@ -3,22 +3,24 @@ package observability
 import (
 	"context"
 	_ "embed"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 	v1 "k8s.io/api/core/v1"
-	"sigs.k8s.io/e2e-framework/klient/decoder"
 	"sigs.k8s.io/e2e-framework/klient/k8s/resources"
 	"sigs.k8s.io/e2e-framework/klient/wait"
+
+	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/load_balancer"
+
+	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/virtual_service"
 
 	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/log"
 
 	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/client"
 	httphelper "github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/http"
-
-	infrahelpers "github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/infrastructure"
 
 	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/namespace"
 
@@ -30,23 +32,14 @@ import (
 	modulehelpers "github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/modules"
 )
 
-//go:embed istio_cr_default.yaml
-var IstioCR string
-
-//go:embed virtual_service.yaml
-var VirtualService string
 
 func TestObservability(t *testing.T) {
 	t.Run("Logs from stdout-json envoyFileAccessLog provider are in correct format", func(t *testing.T) {
 		c, err := client.ResourcesClient(t)
 		require.NoError(t, err)
 
-		require.NoError(
-			t,
-			modulehelpers.CreateIstioOperatorCR(t,
-				modulehelpers.WithIstioOperatorTemplate(IstioCR),
-			),
-		)
+		_, err = modulehelpers.NewIstioCRBuilder().ApplyAndCleanup(t)
+		require.NoError(t, err)
 
 		err = telemetry.EnableLogs(t)
 		require.NoError(t, err)
@@ -54,41 +47,44 @@ func TestObservability(t *testing.T) {
 		err = namespace.LabelNamespaceWithIstioInjection(t, "default")
 		require.NoError(t, err)
 
-		httpbinSvcName, httpbinPort, err := httpbin.DeployHttpbin(t, "default")
+		httpbin, err := httpbin.NewBuilder().DeployWithCleanup(t)
 		require.NoError(t, err)
 
 		// create gateway
 		err = extauth.CreateHTTPGateway(t)
 		require.NoError(t, err)
 
-		// when
-		createdVS, err := infrahelpers.CreateResourceWithTemplateValues(
+		err = virtual_service.CreateVirtualService(
 			t,
-			VirtualService,
-			map[string]any{
-				"Name":            "httpbin",
-				"HostName":        "httpbin.local.kyma.dev",
-				"DestinationHost": httpbinSvcName,
-				"DestinationPort": httpbinPort,
-				"GatewayName":     "kyma-system/kyma-gateway",
-			},
-			decoder.MutateNamespace("default"),
+			"httpbin",
+			"default",
+			httpbin.Host,
+			[]string{httpbin.Host},
+			[]string{"kyma-system/kyma-gateway"},
 		)
-		require.NoError(t, err, "Failed to create VirtualService resource")
-		require.NotEmpty(t, createdVS, "Created VirtualService resource should not be empty")
+		require.NoError(t, err)
+
+		ip, err := load_balancer.GetLoadBalancerIP(t.Context(), c.GetControllerRuntimeClient())
 
 		err = wait.For(func(ctx context.Context) (done bool, err error) {
 			t.Logf("Waiting for endpoint to return 200 OK")
 
-			httpClient := httphelper.NewHTTPClient(t, httphelper.WithPrefix("observability-test"))
-			_, err = httpClient.Get("http://httpbin.local.kyma.dev/headers")
-
+			httpClient := httphelper.NewHTTPClient(t,
+				httphelper.WithPrefix("observability-test"),
+				httphelper.WithHost(httpbin.Host),
+			)
+			url := fmt.Sprintf("http://%s/headers", ip)
+			resp, err := httpClient.Get(url)
 			if err != nil {
+				return false, err
+			}
+			if resp.StatusCode != 200 {
+				t.Logf("Expected status code 200, got %d", resp.StatusCode)
 				return false, nil
 			}
-			return true, nil
 
-		}, wait.WithTimeout(10*time.Second), wait.WithInterval(1*time.Second))
+			return true, nil
+		}, wait.WithTimeout(30*time.Second), wait.WithInterval(2*time.Second))
 
 		httpbinPods := v1.PodList{}
 		err = c.List(t.Context(), &httpbinPods, resources.WithLabelSelector("app=httpbin"))
@@ -136,12 +132,8 @@ func TestObservability(t *testing.T) {
 		c, err := client.ResourcesClient(t)
 		require.NoError(t, err)
 
-		require.NoError(
-			t,
-			modulehelpers.CreateIstioOperatorCR(t,
-				modulehelpers.WithIstioOperatorTemplate(IstioCR),
-			),
-		)
+		_, err = modulehelpers.NewIstioCRBuilder().ApplyAndCleanup(t)
+		require.NoError(t, err)
 
 		err = telemetry.EnableTraces(t)
 		require.NoError(t, err)
@@ -149,7 +141,7 @@ func TestObservability(t *testing.T) {
 		err = namespace.LabelNamespaceWithIstioInjection(t, "default")
 		require.NoError(t, err)
 
-		httpbinSvcName, httpbinPort, err := httpbin.DeployHttpbin(t, "default")
+		httpbin, err := httpbin.NewBuilder().DeployWithCleanup(t)
 		require.NoError(t, err)
 
 		// create gateway
@@ -157,48 +149,49 @@ func TestObservability(t *testing.T) {
 		require.NoError(t, err)
 
 		// when
-		createdVS, err := infrahelpers.CreateResourceWithTemplateValues(
+		err = virtual_service.CreateVirtualService(
 			t,
-			VirtualService,
-			map[string]any{
-				"Name":            "httpbin",
-				"HostName":        "httpbin.local.kyma.dev",
-				"DestinationHost": httpbinSvcName,
-				"DestinationPort": httpbinPort,
-				"GatewayName":     "kyma-system/kyma-gateway",
-			},
-			decoder.MutateNamespace("default"),
+			"httpbin",
+			"default",
+			httpbin.Host,
+			[]string{httpbin.Host},
+			[]string{"kyma-system/kyma-gateway"},
 		)
-		require.NoError(t, err, "Failed to create VirtualService resource")
-		require.NotEmpty(t, createdVS, "Created VirtualService resource should not be empty")
+		require.NoError(t, err)
 
 		err = telemetry.CreateOtelMockCollector(t)
 		require.NoError(t, err)
+
+		ip, err := load_balancer.GetLoadBalancerIP(t.Context(), c.GetControllerRuntimeClient())
 
 		err = wait.For(func(ctx context.Context) (done bool, err error) {
 			t.Logf("Waiting for endpoint to return 200 OK")
 
 			httpClient := httphelper.NewHTTPClient(t, httphelper.WithPrefix("observability-test"))
-			_, err = httpClient.Get("http://httpbin.local.kyma.dev/headers")
+			url := fmt.Sprintf("http://%s/headers", ip)
+			resp, err := httpClient.Get(url)
 
 			if err != nil {
+				return false, err
+			}
+			if resp.StatusCode != 200 {
+				t.Logf("Expected status code 200, got %d", resp.StatusCode)
 				return false, nil
 			}
+
 			return true, nil
 
-		}, wait.WithTimeout(10*time.Second), wait.WithInterval(1*time.Second))
-
-		time.Sleep(100 * time.Second)
+		}, wait.WithTimeout(30*time.Second), wait.WithInterval(2*time.Second))
 
 		otelCollectorMockPods := v1.PodList{}
 		err = c.List(t.Context(), &otelCollectorMockPods, resources.WithLabelSelector("app=otel-collector-mock"))
 		require.NoError(t, err)
+
 		err = wait.For(func(ctx context.Context) (done bool, err error) {
 			t.Logf("Waiting for logs to appear in the otel-collector-mock")
 
 			for _, pod := range otelCollectorMockPods.Items {
 				logs, err := log.GetLogsFromPodContainer(t, pod.Name, pod.Namespace, "otel-collector-mock")
-				println(string(logs))
 				if err != nil {
 					t.Logf("Failed to get logs from pod container: %v", err)
 					return false, err
@@ -209,6 +202,6 @@ func TestObservability(t *testing.T) {
 				}
 			}
 			return true, nil
-		}, wait.WithTimeout(10*time.Second), wait.WithInterval(1*time.Second))
+		}, wait.WithTimeout(30*time.Second), wait.WithInterval(2*time.Second))
 	})
 }

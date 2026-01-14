@@ -12,7 +12,7 @@ import (
 	"github.com/kyma-project/istio/operator/tests/e2e/pkg/setup"
 )
 
-func CreateVirtualService(t *testing.T, name, namespace, dstService string, hosts, gateways []string) error {
+func CreateVirtualService(t *testing.T, name, namespace, dstHost string, hosts, gateways []string) error {
 	t.Helper()
 	t.Logf("creating virtual service %s/%s", namespace, name)
 
@@ -44,7 +44,7 @@ func CreateVirtualService(t *testing.T, name, namespace, dstService string, host
 					Route: []*alpha3.HTTPRouteDestination{
 						{
 							Destination: &alpha3.Destination{
-								Host: dstService,
+								Host: dstHost,
 							},
 						},
 					},
