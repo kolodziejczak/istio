@@ -125,41 +125,35 @@ func TestConfiguration(t *testing.T) {
 	})
 
 	// Scenario: External authorizer (first variant with ext-authz provider)
-	t.Run("External authorizer with ext-authz provider", func(t *testing.T) {
-		// Given: Create namespace and enable istio injection
-		err := infrahelpers.CreateNamespace(t, "default", infrahelpers.WithSidecarInjectionEnabled())
-		require.NoError(t, err)
-
-		// Deploy httpbin
-		httpbinInfo, err := httpbin.NewBuilder().DeployWithCleanup(t)
-		require.NoError(t, err)
-
+	t.Run("External authorizer", func(t *testing.T) {
 		c, err := client.ResourcesClient(t)
 		require.NoError(t, err)
 
-		// Wait for httpbin deployment to be ready
-		httpbinDeployment := &v1.Deployment{}
-		err = c.Get(t.Context(), "httpbin", "default", httpbinDeployment)
-		require.NoError(t, err)
-		err = wait.For(conditions.New(c).DeploymentConditionMatch(httpbinDeployment, v1.DeploymentAvailable, corev1.ConditionTrue), wait.WithContext(t.Context()))
+		err = namespace.LabelNamespaceWithIstioInjection(t, "default")
 		require.NoError(t, err)
 
-		// Deploy ext-authz application
 		err = extauthhelper.CreateExtAuth(t)
 		require.NoError(t, err)
 
-		// Create Istio CR with external authorizer
-		authorizer := &v1alpha2.Authorizer{
+		authorizer1 := &v1alpha2.Authorizer{
 			Name:    "ext-authz",
 			Port:    8000,
 			Service: "ext-authz.ext-auth.svc.cluster.local",
 		}
+		authorizer2 := &v1alpha2.Authorizer{
+			Name:    "ext-authz2",
+			Port:    8000,
+			Service: "ext-authz.ext-auth.svc.cluster.local",
+		}
 		_, err = modulehelpers.NewIstioCRBuilder().
-			WithAuthorizer(authorizer).
+			WithAuthorizer(authorizer1).
+			WithAuthorizer(authorizer2).
 			ApplyAndCleanup(t)
 		require.NoError(t, err)
 
-		// Create gateway and virtual service
+		httpbinInfo, err := httpbin.NewBuilder().DeployWithCleanup(t)
+		require.NoError(t, err)
+
 		err = gatewayhelper.CreateHTTPGateway(t)
 		require.NoError(t, err)
 
@@ -169,11 +163,10 @@ func TestConfiguration(t *testing.T) {
 			"default",
 			httpbinInfo.Host,
 			[]string{httpbinInfo.Host},
-			[]string{"default/test-gateway"},
+			[]string{"kyma-system/kyma-gateway"},
 		)
 		require.NoError(t, err)
 
-		// Create authorization policy for ext-authz
 		err = createAuthorizationPolicy(t, "ext-authz", "default", "httpbin", "ext-authz", "/headers")
 		require.NoError(t, err)
 
@@ -216,105 +209,8 @@ func TestConfiguration(t *testing.T) {
 			}, http.StatusForbidden)
 		require.NoError(t, err)
 	})
-
-	// Scenario: External authorizer (second variant with ext-authz2 provider)
-	t.Run("External authorizer with ext-authz2 provider", func(t *testing.T) {
-		// Given: Create namespace and enable istio injection
-		err := infrahelpers.CreateNamespace(t, "default", infrahelpers.WithSidecarInjectionEnabled())
-		require.NoError(t, err)
-
-		// Deploy httpbin
-		httpbinInfo, err := httpbin.NewBuilder().DeployWithCleanup(t)
-		require.NoError(t, err)
-
-		c, err := client.ResourcesClient(t)
-		require.NoError(t, err)
-
-		// Wait for httpbin deployment to be ready
-		httpbinDeployment := &v1.Deployment{}
-		err = c.Get(t.Context(), "httpbin", "default", httpbinDeployment)
-		require.NoError(t, err)
-		err = wait.For(conditions.New(c).DeploymentConditionMatch(httpbinDeployment, v1.DeploymentAvailable, corev1.ConditionTrue), wait.WithContext(t.Context()))
-		require.NoError(t, err)
-
-		// Deploy ext-authz application
-		err = extauthhelper.CreateExtAuth(t)
-		require.NoError(t, err)
-
-		// Create Istio CR with external authorizer (ext-authz2)
-		authorizer := &v1alpha2.Authorizer{
-			Name:    "ext-authz2",
-			Port:    8000,
-			Service: "ext-authz.ext-auth.svc.cluster.local",
-		}
-		_, err = modulehelpers.NewIstioCRBuilder().
-			WithAuthorizer(authorizer).
-			ApplyAndCleanup(t)
-		require.NoError(t, err)
-
-		// Create gateway and virtual service
-		err = gatewayhelper.CreateHTTPGateway(t)
-		require.NoError(t, err)
-
-		err = virtualservice.CreateVirtualService(
-			t,
-			"httpbin",
-			"default",
-			httpbinInfo.Host,
-			[]string{httpbinInfo.Host},
-			[]string{"default/test-gateway"},
-		)
-		require.NoError(t, err)
-
-		// Create authorization policy for ext-authz2
-		err = createAuthorizationPolicy(t, "ext-authz2", "default", "httpbin", "ext-authz2", "/headers")
-		require.NoError(t, err)
-
-		gatewayAddress, err := load_balancer.GetLoadBalancerIP(t.Context(), c.GetControllerRuntimeClient())
-		require.NoError(t, err)
-
-		// Then: Verify requests work as expected
-		// Test request to root path should return 200
-		err = wait.For(func(ctx context.Context) (done bool, err error) {
-			err = extauth.AssertEndpoint(
-				t,
-				http.MethodGet,
-				fmt.Sprintf("http://%s/", gatewayAddress),
-				map[string]string{"Host": httpbinInfo.Host},
-				http.StatusOK,
-			)
-			if err != nil {
-				return false, err
-			}
-			return true, nil
-		}, wait.WithTimeout(30*time.Second), wait.WithInterval(2*time.Second))
-		require.NoError(t, err)
-
-		// Test request to /headers with allow header should return 200
-		err = extauth.AssertEndpoint(t, http.MethodGet, fmt.Sprintf("http://%s/headers", gatewayAddress),
-			map[string]string{
-				"Host":        httpbinInfo.Host,
-				"x-ext-authz": "allow",
-			}, http.StatusOK)
-		require.NoError(t, err)
-
-		// Verify ext-authz logs contain the expected values
-		log.AssertContainerLogContains(t, c, "ext-authz", "ext-auth", "ext-authz", "X-Add-In-Check:[value] X-Ext-Authz:[allow]")
-
-		// Test request to /headers with deny header should return 403
-		err = extauth.AssertEndpoint(t, http.MethodGet, fmt.Sprintf("http://%s/headers", gatewayAddress),
-			map[string]string{
-				"Host":        httpbinInfo.Host,
-				"x-ext-authz": "deny",
-			}, http.StatusForbidden)
-		require.NoError(t, err)
-
-		// Verify ext-authz logs contain the expected values
-		log.AssertContainerLogContains(t, c, "ext-authz", "ext-auth", "ext-authz", "X-Add-In-Check:[value] X-Ext-Authz:[deny]")
-	})
 }
 
-// Helper function to assert proxy resources for a deployment
 func assertProxyResourcesForDeployment(t *testing.T, c *resources.Resources, deploymentName, _ string, cpuRequest, memRequest, cpuLimit, memLimit string) {
 	t.Helper()
 
@@ -363,7 +259,6 @@ func assertProxyResourcesForDeployment(t *testing.T, c *resources.Resources, dep
 	require.NoError(t, err, "Failed to verify proxy resources for deployment %s", deploymentName)
 }
 
-// Helper function to check if resource values match expected values
 func checkResourceValues(resources corev1.ResourceRequirements, cpuRequest, memRequest, cpuLimit, memLimit string) bool {
 	expectedCPURequest := resource.MustParse(cpuRequest)
 	expectedMemRequest := resource.MustParse(memRequest)
@@ -381,7 +276,6 @@ func checkResourceValues(resources corev1.ResourceRequirements, cpuRequest, memR
 		actualMemLimit.Equal(expectedMemLimit)
 }
 
-// Helper function to assert X-Envoy-External-Address header value
 func assertEnvoyExternalAddress(t *testing.T, gatewayAddress string, hostHeader string, xForwardedFor, expectedExternalAddress string) {
 	t.Helper()
 
@@ -433,7 +327,6 @@ func assertEnvoyExternalAddress(t *testing.T, gatewayAddress string, hostHeader 
 	require.NoError(t, err)
 }
 
-// Helper function to create authorization policy for ext-authz
 func createAuthorizationPolicy(t *testing.T, name, namespace, appSelector, provider, path string) error {
 	t.Helper()
 	t.Logf("Creating authorization policy %s in namespace %s", name, namespace)
