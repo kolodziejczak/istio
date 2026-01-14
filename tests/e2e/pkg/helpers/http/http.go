@@ -61,6 +61,7 @@ func TestLogTransportWrapper(t *testing.T, prefix string, host string, headers m
 		if host != "" {
 			req.Host = host
 		}
+		t.Logf("[%s] request Host header set to: %s", prefix, req.Host)
 
 		// Set custom headers if specified
 		for key, value := range headers {

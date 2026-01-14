@@ -4,16 +4,17 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
-	httphelper "github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/http"
-	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/load_balancer"
-	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/zero_downtime"
 	"github.com/stretchr/testify/require"
 	v1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/e2e-framework/klient/k8s/resources"
 	"sigs.k8s.io/e2e-framework/klient/wait"
 
-	"github.com/kyma-project/istio/operator/api/v1alpha2"
+	httphelper "github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/http"
+	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/load_balancer"
+	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/zero_downtime"
+
 	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/client"
 	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/crds"
 	extauth "github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/gateway"
@@ -30,22 +31,22 @@ func TestUpgrade(t *testing.T) {
 		c, err := client.ResourcesClient(t)
 		require.NoError(t, err)
 
-		err = modules.CreateIstioOperatorCR(t)
+		istioCR, err := modules.NewIstioCRBuilder().ApplyAndCleanup(t)
 		require.NoError(t, err)
 
 		err = crds.AssertIstioCRDsPresent(t.Context(), c.GetControllerRuntimeClient())
 		require.NoError(t, err)
 
-		i := v1alpha2.Istio{}
-		err = c.Get(t.Context(), "default", "kyma-system", &i)
+		err = c.Get(t.Context(), istioCR.Name, istioCR.Namespace, istioCR)
 		require.NoError(t, err)
 
 		err = namespace.LabelNamespaceWithIstioInjection(t, "default")
 		require.NoError(t, err)
 
-		httpbinSvcName, _, err := httpbin.DeployHttpbin(t, "default")
+		httpbinNativeSidecar, err := httpbin.NewBuilder().DeployWithCleanup(t)
 		require.NoError(t, err)
-		httpbinRegularSidecarSvcName, _, err := httpbin.DeployHttpbinWithRegularSidecar(t, "default")
+
+		httpbinRegularSidecar, err := httpbin.NewBuilder().WithName("httpbin-regular-sidecar").WithRegularSidecar().DeployWithCleanup(t)
 		require.NoError(t, err)
 
 		err = extauth.CreateHTTPGateway(t)
@@ -55,8 +56,8 @@ func TestUpgrade(t *testing.T) {
 			t,
 			"httpbin-vs",
 			"default",
-			httpbinSvcName,
-			[]string{"httpbin.default.local.kyma.dev"},
+			httpbinNativeSidecar.Host,
+			[]string{httpbinNativeSidecar.Host},
 			[]string{"kyma-system/kyma-gateway"},
 		)
 		require.NoError(t, err)
@@ -65,8 +66,8 @@ func TestUpgrade(t *testing.T) {
 			t,
 			"httpbin-vs-regular-sidecar",
 			"default",
-			httpbinRegularSidecarSvcName,
-			[]string{"httpbin-regular-sidecar.default.local.kyma.dev"},
+			httpbinRegularSidecar.Host,
+			[]string{httpbinRegularSidecar.Host},
 			[]string{"kyma-system/kyma-gateway"},
 		)
 		require.NoError(t, err)
@@ -98,7 +99,7 @@ func TestUpgrade(t *testing.T) {
 			t.Logf("Waiting for endpoint to return 200 OK")
 			httpClient := httphelper.NewHTTPClient(t,
 				httphelper.WithPrefix("upgrade-test"),
-				httphelper.WithHost("httpbin.default.local.kyma.dev"),
+				httphelper.WithHost(httpbinNativeSidecar.Host),
 			)
 
 			resp, err := httpClient.Get(fmt.Sprintf("http://%s/headers", lbIp))
@@ -111,17 +112,37 @@ func TestUpgrade(t *testing.T) {
 			}
 
 			return true, nil
-		})
+		}, wait.WithContext(t.Context()), wait.WithTimeout(60*time.Second), wait.WithInterval(2*time.Second))
+		require.NoError(t, err)
+
+		err = wait.For(func(ctx context.Context) (done bool, err error) {
+			t.Logf("Waiting for endpoint to return 200 OK")
+			httpClient := httphelper.NewHTTPClient(t,
+				httphelper.WithPrefix("upgrade-test"),
+				httphelper.WithHost(httpbinRegularSidecar.Host),
+			)
+
+			resp, err := httpClient.Get(fmt.Sprintf("http://%s/headers", lbIp))
+			if err != nil {
+				return false, nil
+			}
+			if resp.StatusCode != 200 {
+				t.Logf("Endpoint status code %d", resp.StatusCode)
+				return false, nil
+			}
+
+			return true, nil
+		}, wait.WithContext(t.Context()), wait.WithTimeout(60*time.Second), wait.WithInterval(2*time.Second))
 		require.NoError(t, err)
 
 		// Start zero downtime testing for both httpbin endpoints
 		t.Log("Starting zero downtime tests")
 		zeroDowntimeRunner := &zero_downtime.ZeroDowntimeTestRunner{}
 
-		_, err = zeroDowntimeRunner.StartZeroDowntimeTest(t.Context(), c.GetControllerRuntimeClient(), "httpbin.default.local.kyma.dev", "/headers")
+		_, err = zeroDowntimeRunner.StartZeroDowntimeTest(t.Context(), c.GetControllerRuntimeClient(), httpbinNativeSidecar.Host, "/headers")
 		require.NoError(t, err)
 
-		_, err = zeroDowntimeRunner.StartZeroDowntimeTest(t.Context(), c.GetControllerRuntimeClient(), "httpbin-regular-sidecar.default.local.kyma.dev", "/headers")
+		_, err = zeroDowntimeRunner.StartZeroDowntimeTest(t.Context(), c.GetControllerRuntimeClient(), httpbinRegularSidecar.Host, "/headers")
 		require.NoError(t, err)
 
 		// Perform the upgrade
