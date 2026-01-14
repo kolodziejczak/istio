@@ -2,6 +2,7 @@ package configuration
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"testing"
@@ -20,6 +21,7 @@ import (
 	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/client"
 	extauthhelper "github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/extauth"
 	gatewayhelper "github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/gateway"
+	httphelper "github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/http"
 	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/httpbin"
 	infrahelpers "github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/infrastructure"
 	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/load_balancer"
@@ -386,6 +388,8 @@ func checkResourceValues(resources corev1.ResourceRequirements, cpuRequest, memR
 func assertEnvoyExternalAddress(t *testing.T, gatewayAddress string, hostHeader string, xForwardedFor, expectedExternalAddress string) {
 	t.Helper()
 
+	httpClient := httphelper.NewHTTPClient(t, httphelper.WithHost(hostHeader))
+
 	err := wait.For(func(ctx context.Context) (done bool, err error) {
 		url := fmt.Sprintf("http://%s/headers", gatewayAddress)
 		req, err := http.NewRequest(http.MethodGet, url, nil)
@@ -393,11 +397,8 @@ func assertEnvoyExternalAddress(t *testing.T, gatewayAddress string, hostHeader 
 			return false, err
 		}
 
-		req.Header.Set("Host", hostHeader)
 		req.Header.Set("X-Forwarded-For", xForwardedFor)
-		println("MAKING REUEST WITH THE FOLLOWIN HOST HEADER", req.Host)
 
-		httpClient := &http.Client{}
 		resp, err := httpClient.Do(req)
 		if err != nil {
 			return false, err
@@ -410,8 +411,21 @@ func assertEnvoyExternalAddress(t *testing.T, gatewayAddress string, hostHeader 
 			return false, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 		}
 
-		// Check for X-Envoy-External-Address in response headers
-		actualExternalAddress := resp.Header.Get("X-Envoy-External-Address")
+		// Parse JSON response body
+		var bodyResponse struct {
+			Headers map[string][]string `json:"headers"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&bodyResponse); err != nil {
+			return false, fmt.Errorf("failed to decode response body: %w", err)
+		}
+
+		// Get X-Envoy-External-Address from the headers in the body
+		externalAddressValues, ok := bodyResponse.Headers["X-Envoy-External-Address"]
+		if !ok || len(externalAddressValues) == 0 {
+			return false, fmt.Errorf("X-Envoy-External-Address not found in response body")
+		}
+
+		actualExternalAddress := externalAddressValues[0]
 		if actualExternalAddress != expectedExternalAddress {
 			return false, fmt.Errorf("X-Envoy-External-Address mismatch: expected %s, got %s", expectedExternalAddress, actualExternalAddress)
 		}
