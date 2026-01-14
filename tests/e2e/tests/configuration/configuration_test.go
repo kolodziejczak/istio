@@ -20,11 +20,12 @@ import (
 	"sigs.k8s.io/e2e-framework/klient/wait"
 	"sigs.k8s.io/e2e-framework/klient/wait/conditions"
 
+	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/extauth"
+
 	"github.com/kyma-project/istio/operator/tests/e2e/pkg/setup"
 
 	"github.com/kyma-project/istio/operator/api/v1alpha2"
 	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/client"
-	extauthhelper "github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/extauth"
 	gatewayhelper "github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/gateway"
 	httphelper "github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/http"
 	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/httpbin"
@@ -135,13 +136,16 @@ func TestConfiguration(t *testing.T) {
 		err = namespace.LabelNamespaceWithIstioInjection(t, "default")
 		require.NoError(t, err)
 
-		err = extauthhelper.CreateExtAuth(t)
+		extAuth, err := extauth.NewBuilder().WithName("ext-authz").WithNamespace("ext-auth").DeployWithCleanup(t)
+		require.NoError(t, err)
+
+		extAuth2, err := extauth.NewBuilder().WithName("ext-authz2").WithNamespace("ext-auth").DeployWithCleanup(t)
 		require.NoError(t, err)
 
 		authorizer1 := &v1alpha2.Authorizer{
 			Name:    "ext-authz",
-			Port:    8000,
-			Service: "ext-authz.ext-auth.svc.cluster.local",
+			Port:    uint32(extAuth.HttpPort),
+			Service: extAuth.Host,
 			Headers: &v1alpha2.Headers{
 				InCheck: &v1alpha2.InCheck{
 					Include: []string{"X-Ext-Authz"},
@@ -151,22 +155,22 @@ func TestConfiguration(t *testing.T) {
 				},
 			},
 		}
-		//authorizer2 := &v1alpha2.Authorizer{
-		//	Name:    "ext-authz2",
-		//	Port:    8000,
-		//	Service: "ext-authz.ext-auth.svc.cluster.local",
-		//	Headers: &v1alpha2.Headers{
-		//		InCheck: &v1alpha2.InCheck{
-		//			Include: []string{"X-Ext-Authz"},
-		//			Add: map[string]string{
-		//				"X-Add-In-Check": "value",
-		//			},
-		//		},
-		//	},
-		//}
+		authorizer2 := &v1alpha2.Authorizer{
+			Name:    "ext-authz2",
+			Port:    uint32(extAuth2.HttpPort),
+			Service: extAuth2.Host,
+			Headers: &v1alpha2.Headers{
+				InCheck: &v1alpha2.InCheck{
+					Include: []string{"X-Ext-Authz"},
+					Add: map[string]string{
+						"X-Add-In-Check": "value",
+					},
+				},
+			},
+		}
 		_, err = modulehelpers.NewIstioCRBuilder().
 			WithAuthorizer(authorizer1).
-			//WithAuthorizer(authorizer2).
+			WithAuthorizer(authorizer2).
 			ApplyAndCleanup(t)
 		require.NoError(t, err)
 
@@ -250,7 +254,7 @@ func TestConfiguration(t *testing.T) {
 				return false, err
 			}
 
-			if resp.StatusCode != http.StatusForbidden{
+			if resp.StatusCode != http.StatusForbidden {
 				t.Logf("Expected status code %d got status code %d", http.StatusOK, resp.StatusCode)
 				return false, nil
 			}
