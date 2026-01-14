@@ -30,7 +30,6 @@ import (
 )
 
 func TestConfiguration(t *testing.T) {
-	// Scenario: Updating proxy resource configuration
 	t.Run("Updating proxy resource configuration", func(t *testing.T) {
 		c, err := client.ResourcesClient(t)
 		require.NoError(t, err)
@@ -337,55 +336,67 @@ func TestConfiguration(t *testing.T) {
 func assertProxyResourcesForDeployment(t *testing.T, c *resources.Resources, deploymentName, _ string, cpuRequest, memRequest, cpuLimit, memLimit string) {
 	t.Helper()
 
-	podList := &corev1.PodList{}
-	err := c.List(t.Context(), podList, resources.WithLabelSelector(fmt.Sprintf("app=%s", deploymentName)))
-	require.NoError(t, err)
-	require.NotEmpty(t, podList.Items, "No pods found for deployment %s", deploymentName)
+	// Wait for the deployment to be restarted with new resource configurations
+	err := wait.For(func(ctx context.Context) (done bool, err error) {
+		podList := &corev1.PodList{}
+		err = c.List(ctx, podList, resources.WithLabelSelector(fmt.Sprintf("app=%s", deploymentName)))
+		if err != nil {
+			return false, err
+		}
 
-	for _, pod := range podList.Items {
-		// Check init containers for istio-proxy
-		for _, container := range pod.Spec.InitContainers {
-			if container.Name == "istio-proxy" {
-				assertResourceValues(t, container.Resources, cpuRequest, memRequest, cpuLimit, memLimit)
-				return
+		if len(podList.Items) == 0 {
+			return false, fmt.Errorf("no pods found for deployment %s", deploymentName)
+		}
+
+		for _, pod := range podList.Items {
+			// Skip pods that are not ready
+			if pod.Status.Phase != corev1.PodRunning {
+				return false, nil
+			}
+
+			// Check init containers for istio-proxy
+			for _, container := range pod.Spec.InitContainers {
+				if container.Name == "istio-proxy" {
+					if !checkResourceValues(container.Resources, cpuRequest, memRequest, cpuLimit, memLimit) {
+						return false, nil
+					}
+					return true, nil
+				}
+			}
+
+			// Check regular containers for istio-proxy
+			for _, container := range pod.Spec.Containers {
+				if container.Name == "istio-proxy" {
+					if !checkResourceValues(container.Resources, cpuRequest, memRequest, cpuLimit, memLimit) {
+						return false, nil
+					}
+					return true, nil
+				}
 			}
 		}
 
-		// Check regular containers for istio-proxy
-		for _, container := range pod.Spec.Containers {
-			if container.Name == "istio-proxy" {
-				assertResourceValues(t, container.Resources, cpuRequest, memRequest, cpuLimit, memLimit)
-				return
-			}
-		}
-	}
+		return false, fmt.Errorf("istio-proxy container not found in pods for deployment %s", deploymentName)
+	}, wait.WithTimeout(1*time.Minute), wait.WithInterval(5*time.Second), wait.WithContext(t.Context()))
 
-	t.Fatalf("istio-proxy container not found in pods for deployment %s", deploymentName)
+	require.NoError(t, err, "Failed to verify proxy resources for deployment %s", deploymentName)
 }
 
-// Helper function to assert resource values
-func assertResourceValues(t *testing.T, resources corev1.ResourceRequirements, cpuRequest, memRequest, cpuLimit, memLimit string) {
-	t.Helper()
-
-	// Assert CPU request
-	actualCPURequest := resources.Requests[corev1.ResourceCPU]
+// Helper function to check if resource values match expected values
+func checkResourceValues(resources corev1.ResourceRequirements, cpuRequest, memRequest, cpuLimit, memLimit string) bool {
 	expectedCPURequest := resource.MustParse(cpuRequest)
-	require.True(t, actualCPURequest.Equal(expectedCPURequest), "CPU request mismatch: expected %s, got %s", cpuRequest, actualCPURequest.String())
-
-	// Assert Memory request
-	actualMemRequest := resources.Requests[corev1.ResourceMemory]
 	expectedMemRequest := resource.MustParse(memRequest)
-	require.True(t, actualMemRequest.Equal(expectedMemRequest), "Memory request mismatch: expected %s, got %s", memRequest, actualMemRequest.String())
-
-	// Assert CPU limit
-	actualCPULimit := resources.Limits[corev1.ResourceCPU]
 	expectedCPULimit := resource.MustParse(cpuLimit)
-	require.True(t, actualCPULimit.Equal(expectedCPULimit), "CPU limit mismatch: expected %s, got %s", cpuLimit, actualCPULimit.String())
-
-	// Assert Memory limit
-	actualMemLimit := resources.Limits[corev1.ResourceMemory]
 	expectedMemLimit := resource.MustParse(memLimit)
-	require.True(t, actualMemLimit.Equal(expectedMemLimit), "Memory limit mismatch: expected %s, got %s", memLimit, actualMemLimit.String())
+
+	actualCPURequest := resources.Requests[corev1.ResourceCPU]
+	actualMemRequest := resources.Requests[corev1.ResourceMemory]
+	actualCPULimit := resources.Limits[corev1.ResourceCPU]
+	actualMemLimit := resources.Limits[corev1.ResourceMemory]
+
+	return actualCPURequest.Equal(expectedCPURequest) &&
+		actualMemRequest.Equal(expectedMemRequest) &&
+		actualCPULimit.Equal(expectedCPULimit) &&
+		actualMemLimit.Equal(expectedMemLimit)
 }
 
 // Helper function to assert X-Envoy-External-Address header value
