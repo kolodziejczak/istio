@@ -7,8 +7,9 @@ import (
 )
 
 type Options struct {
-	Prefix string
-	Host   string
+	Prefix  string
+	Host    string
+	Headers map[string]string
 }
 
 type Option func(*Options)
@@ -25,6 +26,12 @@ func WithHost(host string) Option {
 	}
 }
 
+func WithHeaders(headers map[string]string) Option {
+	return func(o *Options) {
+		o.Headers = headers
+	}
+}
+
 func NewHTTPClient(t *testing.T, options ...Option) *http.Client {
 	t.Helper()
 	opts := &Options{
@@ -38,7 +45,7 @@ func NewHTTPClient(t *testing.T, options ...Option) *http.Client {
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
 	return &http.Client{
-		Transport: TestLogTransportWrapper(t, opts.Prefix, opts.Host, &transport),
+		Transport: TestLogTransportWrapper(t, opts.Prefix, opts.Host, opts.Headers, &transport),
 	}
 }
 
@@ -48,11 +55,16 @@ func (fn RoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return fn(req)
 }
 
-func TestLogTransportWrapper(t *testing.T, prefix string, host string, rt http.RoundTripper) RoundTripFunc {
+func TestLogTransportWrapper(t *testing.T, prefix string, host string, headers map[string]string, rt http.RoundTripper) RoundTripFunc {
 	return func(req *http.Request) (*http.Response, error) {
 		// Set Host header if specified
 		if host != "" {
 			req.Host = host
+		}
+
+		// Set custom headers if specified
+		for key, value := range headers {
+			req.Header.Set(key, value)
 		}
 
 		t.Logf("[%s] request method: %s, url: %s, host: %s", prefix, req.Method, req.URL, req.Host)

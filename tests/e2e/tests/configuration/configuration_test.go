@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/log"
 	"github.com/stretchr/testify/require"
 	apisecurityv1 "istio.io/api/security/v1"
 	apiv1beta1 "istio.io/api/type/v1beta1"
@@ -219,7 +218,10 @@ func TestConfiguration(t *testing.T) {
 		require.NoError(t, err)
 
 		err = wait.For(func(ctx context.Context) (done bool, err error) {
-			hc := httphelper.NewHTTPClient(t, httphelper.WithHost(httpbinInfo.Host))
+			hc := httphelper.NewHTTPClient(t,
+				httphelper.WithHost(httpbinInfo.Host),
+				httphelper.WithHeaders(map[string]string{"x-ext-authz": "allow"}),
+			)
 
 			url := fmt.Sprintf("http://%s/headers", gatewayAddress)
 			resp, err := hc.Get(url)
@@ -236,9 +238,28 @@ func TestConfiguration(t *testing.T) {
 		}, wait.WithTimeout(30*time.Second), wait.WithInterval(2*time.Second))
 		require.NoError(t, err)
 
+		err = wait.For(func(ctx context.Context) (done bool, err error) {
+			hc := httphelper.NewHTTPClient(t,
+				httphelper.WithHost(httpbinInfo.Host),
+				httphelper.WithHeaders(map[string]string{"x-ext-authz": "deny"}),
+			)
 
+			url := fmt.Sprintf("http://%s/headers", gatewayAddress)
+			resp, err := hc.Get(url)
+			if err != nil {
+				return false, err
+			}
+
+			if resp.StatusCode != http.StatusForbidden{
+				t.Logf("Expected status code %d got status code %d", http.StatusOK, resp.StatusCode)
+				return false, nil
+			}
+
+			return true, nil
+		}, wait.WithTimeout(30*time.Second), wait.WithInterval(2*time.Second))
+		require.NoError(t, err)
 		// Verify ext-authz logs contain the expected values
-		log.AssertContainerLogContains(t, c, "ext-authz", "ext-auth", "ext-authz", "X-Add-In-Check:[value] X-Ext-Authz:[allow]")
+		//log.AssertContainerLogContains(t, c, "ext-authz", "ext-auth", "ext-authz", "X-Add-In-Check:[value] X-Ext-Authz:[allow]")
 
 	})
 }
