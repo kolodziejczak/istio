@@ -26,29 +26,23 @@ import (
 	"github.com/kyma-project/istio/operator/tests/e2e/pkg/helpers/nginx"
 )
 
-//go:embed istio_cr_default.yaml
-var IstioCR string
-
 //go:embed virtual_service_nginx.yaml
 var VirtualServiceSourceWorkload string
 
 func TestMeshCommunication(t *testing.T) {
 	t.Run("Access between applications in different namespaces", func(t *testing.T) {
-		require.NoError(
-			t,
-			modulehelpers.CreateIstioOperatorCR(t,
-				modulehelpers.WithIstioOperatorTemplate(IstioCR),
-			),
-		)
+		_, err := client.ResourcesClient(t)
+		_, err = modulehelpers.NewIstioCRBuilder().ApplyAndCleanup(t)
+		require.NoError(t, err)
 
-		err := infrastructure.CreateNamespace(
+		err = infrastructure.CreateNamespace(
 			t,
 			"target",
 			infrastructure.WithSidecarInjectionEnabled(),
 		)
 		require.NoError(t, err)
 
-		svcName, svcPort, err := httpbin.DeployHttpbin(t, "target")
+		httpbin, err := httpbin.NewBuilder().WithNamespace("target").DeployWithCleanup(t)
 		require.NoError(t, err)
 
 		err = infrastructure.CreateNamespace(
@@ -58,8 +52,7 @@ func TestMeshCommunication(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		forwardTarget := fmt.Sprintf("%s.target.svc.cluster.local:%d", svcName, svcPort)
-		sourceWorkloadUrl, err := nginx.CreateForwardRequestNginx(t, "nginx-mesh-communication", "source", forwardTarget)
+		sourceWorkloadUrl, err := nginx.CreateForwardRequestNginx(t, "nginx-mesh-communication", "source", fmt.Sprintf("%s:%d", httpbin.Host, httpbin.Port))
 		require.NoError(t, err)
 
 		err = extauth.CreateHTTPGateway(t)
@@ -80,12 +73,19 @@ func TestMeshCommunication(t *testing.T) {
 		require.NoError(t, err)
 		require.NotEmpty(t, createdVs)
 
+		//_, err := load_balancer.GetLoadBalancerIP(t.Context(), c.GetControllerRuntimeClient())
+		//require.NoError(t, err)
+
 		err = wait.For(func(ctx context.Context) (done bool, err error) {
 			t.Logf("Waiting for endpoint to return 200 OK")
 			httpClient := httphelper.NewHTTPClient(t, httphelper.WithPrefix("mesh-communication-test"))
 
 			resp, err := httpClient.Get("http://nginx-mesh-communication.local.kyma.dev/headers")
 			if err != nil {
+				return false, err
+			}
+			if resp.StatusCode != 200 {
+				t.Logf("Unexpected status code: %d", resp.StatusCode)
 				return false, nil
 			}
 
@@ -107,21 +107,17 @@ func TestMeshCommunication(t *testing.T) {
 	})
 
 	t.Run("Access between applications from injection disabled namespace to injection enabled namespace is restricted", func(t *testing.T) {
-		require.NoError(
-			t,
-			modulehelpers.CreateIstioOperatorCR(t,
-				modulehelpers.WithIstioOperatorTemplate(IstioCR),
-			),
-		)
+		_, err := modulehelpers.NewIstioCRBuilder().ApplyAndCleanup(t)
+		require.NoError(t, err)
 
-		err := infrastructure.CreateNamespace(
+		err = infrastructure.CreateNamespace(
 			t,
 			"target",
 			infrastructure.WithSidecarInjectionEnabled(),
 		)
 		require.NoError(t, err)
 
-		svcName, svcPort, err := httpbin.DeployHttpbin(t, "target")
+		httpbin, err := httpbin.NewBuilder().WithNamespace("target").DeployWithCleanup(t)
 		require.NoError(t, err)
 
 		// source should not be istio injected
@@ -131,8 +127,7 @@ func TestMeshCommunication(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		forwardTarget := fmt.Sprintf("%s.target.svc.cluster.local:%d", svcName, svcPort)
-		sourceWorkloadUrl, err := nginx.CreateForwardRequestNginx(t, "nginx-mesh-communication", "source", forwardTarget)
+		sourceWorkloadUrl, err := nginx.CreateForwardRequestNginx(t, "nginx-mesh-communication", "source", fmt.Sprintf("%s:%d", httpbin.Host, httpbin.Port))
 		require.NoError(t, err)
 
 		err = extauth.CreateHTTPGateway(t)
@@ -159,9 +154,12 @@ func TestMeshCommunication(t *testing.T) {
 
 			resp, err := httpClient.Get("http://nginx-mesh-communication.local.kyma.dev/headers")
 			if err != nil {
+				return false, err
+			}
+			if resp.StatusCode != 502 {
+				t.Logf("Unexpected status code: %d", resp.StatusCode)
 				return false, nil
 			}
-			require.Equal(t, 502, resp.StatusCode)
 
 			return true, nil
 		})
@@ -169,12 +167,7 @@ func TestMeshCommunication(t *testing.T) {
 
 	t.Run("Namespace with istio-injection=disabled label does not contain pods with istio sidecar", func(t *testing.T) {
 		c, err := client.ResourcesClient(t)
-		require.NoError(
-			t,
-			modulehelpers.CreateIstioOperatorCR(t,
-				modulehelpers.WithIstioOperatorTemplate(IstioCR),
-			),
-		)
+		_, err = modulehelpers.NewIstioCRBuilder().ApplyAndCleanup(t)
 
 		err = infrastructure.CreateNamespace(
 			t,
@@ -183,12 +176,13 @@ func TestMeshCommunication(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		_, _, err = httpbin.DeployHttpbin(t, "sidecar-disabled")
+		_, err = httpbin.NewBuilder().WithNamespace("sidecar-disabled").DeployWithCleanup(t)
 		require.NoError(t, err)
 
 		httpbinPodList := &v1.PodList{}
 		err = c.List(t.Context(), httpbinPodList, resources.WithLabelSelector("app=httpbin"))
 		require.NoError(t, err)
+
 		for _, pod := range httpbinPodList.Items {
 			for _, container := range pod.Spec.InitContainers {
 				require.NotEqual(t, "istio-proxy", container.Name, "Found istio-proxy sidecar in pod %s", pod.Name)
@@ -198,12 +192,8 @@ func TestMeshCommunication(t *testing.T) {
 
 	t.Run("Namespace with istio-injection=enabled label does contain pods with istio sidecar", func(t *testing.T) {
 		c, err := client.ResourcesClient(t)
-		require.NoError(
-			t,
-			modulehelpers.CreateIstioOperatorCR(t,
-				modulehelpers.WithIstioOperatorTemplate(IstioCR),
-			),
-		)
+		_, err = modulehelpers.NewIstioCRBuilder().ApplyAndCleanup(t)
+		require.NoError(t, err)
 
 		err = infrastructure.CreateNamespace(
 			t,
@@ -212,18 +202,19 @@ func TestMeshCommunication(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		_, _, err = httpbin.DeployHttpbin(t, "sidecar-enabled")
+		_, err = httpbin.NewBuilder().WithNamespace("sidecar-enabled").DeployWithCleanup(t)
 		require.NoError(t, err)
 
 		httpbinPodList := &v1.PodList{}
 		err = c.List(t.Context(), httpbinPodList, resources.WithLabelSelector("app=httpbin"))
 		require.NoError(t, err)
+
 		for _, pod := range httpbinPodList.Items {
 			contain := false
 			for _, container := range pod.Spec.InitContainers {
-				println("XDDDD: ", container.Name)
 				if container.Name == "istio-proxy" {
 					contain = true
+					continue
 				}
 			}
 			require.True(t, contain)
@@ -232,19 +223,15 @@ func TestMeshCommunication(t *testing.T) {
 
 	t.Run("Kube-system namespace does not contain pods with sidecar", func(t *testing.T) {
 		c, err := client.ResourcesClient(t)
-		require.NoError(
-			t,
-			modulehelpers.CreateIstioOperatorCR(t,
-				modulehelpers.WithIstioOperatorTemplate(IstioCR),
-			),
-		)
+		_, err = modulehelpers.NewIstioCRBuilder().ApplyAndCleanup(t)
 
-		_, _, err = httpbin.DeployHttpbin(t, "kube-system")
+		_, err = httpbin.NewBuilder().WithNamespace("kube-system").DeployWithCleanup(t)
 		require.NoError(t, err)
 
 		httpbinPodList := &v1.PodList{}
 		err = c.List(t.Context(), httpbinPodList, resources.WithLabelSelector("app=httpbin"))
 		require.NoError(t, err)
+
 		for _, pod := range httpbinPodList.Items {
 			if pod.Namespace == "kube-system" {
 				for _, container := range pod.Spec.InitContainers {
