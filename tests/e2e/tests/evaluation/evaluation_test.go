@@ -18,32 +18,31 @@ import (
 )
 
 func TestEvaluationProfile(t *testing.T) {
-	t.Run("Installation of Istio Module with evaluation profile", func(t *testing.T) {
-		err := infrastructure.EnsureEvaluationClusterProfile(t)
-		require.NoError(t, err)
+	err := infrastructure.EnsureEvaluationClusterProfile(t)
+	require.NoError(t, err)
 
-		istioCR, err := modulehelpers.NewIstioCRBuilder().ApplyAndCleanup(t)
-		require.NoError(t, err)
+	istioCR, err := modulehelpers.NewIstioCRBuilder().ApplyAndCleanup(t)
+	require.NoError(t, err)
 
-		c, err := resourceClient.ResourcesClient(t)
-		require.NoError(t, err)
+	c, err := resourceClient.ResourcesClient(t)
+	require.NoError(t, err)
 
-		err = c.Get(t.Context(), istioCR.Name, istioCR.Namespace, istioCR)
-		require.NoError(t, err)
+	err = c.Get(t.Context(), istioCR.Name, istioCR.Namespace, istioCR)
+	require.NoError(t, err)
 
-		conditions := *istioCR.Status.Conditions
-		require.Equal(t, v1alpha2.Ready, istioCR.Status.State)
-		require.Equal(t, string(v1alpha2.ConditionReasonReconcileSucceeded), conditions[0].Reason)
-		require.Equal(t, string(v1alpha2.ConditionTypeReady), conditions[0].Type)
-		require.Equal(t, metav1.ConditionTrue, conditions[0].Status)
+	conditions := *istioCR.Status.Conditions
+	require.Equal(t, v1alpha2.Ready, istioCR.Status.State)
+	require.Equal(t, string(v1alpha2.ConditionReasonReconcileSucceeded), conditions[0].Reason)
+	require.Equal(t, string(v1alpha2.ConditionTypeReady), conditions[0].Type)
+	require.Equal(t, metav1.ConditionTrue, conditions[0].Status)
 
-		err = namespace.LabelNamespaceWithIstioInjection(t, "default")
-		require.NoError(t, err)
+	err = namespace.LabelNamespaceWithIstioInjection(t, "default")
+	require.NoError(t, err)
 
-		_, _, err = httpbin.DeployHttpbin(t, "default")
-		require.NoError(t, err)
+	_, _, err = httpbin.DeployHttpbin(t, "default")
+	require.NoError(t, err)
 
-		// istiod
+	t.Run("Istiod should use evaluation profile specific resources", func(t *testing.T) {
 		istiodPodList, err := infrastructure.GetIstiodPods(t)
 		require.NoError(t, err)
 
@@ -55,8 +54,8 @@ func TestEvaluationProfile(t *testing.T) {
 				require.Equal(t, "1024Mi", container.Resources.Limits.Memory().String())
 			}
 		}
-
-		// istio-ingressgateway
+	})
+	t.Run("Istio Ingress Gateway should use evaluation profile specific resources", func(t *testing.T) {
 		igPodList, err := infrastructure.GetIngressGatewayPods(t)
 		require.NoError(t, err)
 
@@ -68,8 +67,8 @@ func TestEvaluationProfile(t *testing.T) {
 				require.Equal(t, "1024Mi", container.Resources.Limits.Memory().String())
 			}
 		}
-
-		// workload
+	})
+	t.Run("Istio Proxy attached to customer workload should use evaluation profile specific resources", func(t *testing.T) {
 		httpbinPodList, err := infrastructure.GetHttpbinPods(t)
 		require.NoError(t, err)
 
@@ -87,6 +86,5 @@ func TestEvaluationProfile(t *testing.T) {
 			}
 		}
 		require.True(t, containerFound)
-
 	})
 }
