@@ -2,7 +2,7 @@ package pods
 
 import (
 	"context"
-	"fmt"
+
 	"github.com/go-logr/logr"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/fields"
@@ -36,6 +36,7 @@ type Getter interface {
 type Pods struct {
 	k8sClient client.Client
 	logger    *logr.Logger
+	continueToken string
 }
 
 func NewPods(k8sClient client.Client, logger *logr.Logger) *Pods {
@@ -49,7 +50,8 @@ func NewPods(k8sClient client.Client, logger *logr.Logger) *Pods {
 func (p *Pods) GetPodsToRestart(ctx context.Context, preds []predicates.SidecarProxyPredicate, limits *RestartLimits) (*v1.PodList, error) {
 	podsToRestart := &v1.PodList{}
 	for while := true; while; {
-		podsWithSidecar, err := getSidecarPods(ctx, p.k8sClient, p.logger, limits.PodsToListLimit, podsToRestart.Continue)
+		// TODO: here we need to pass lower limit in case of kyma workloads restart as its math.MaxInt which makes the bellow function to get all Pods in the cluster and potentially OOM killed
+		podsWithSidecar, err := getSidecarPods(ctx, p.k8sClient, p.logger, limits.PodsToListLimit, p.continueToken)
 		if err != nil {
 			return nil, err
 		}
@@ -59,13 +61,13 @@ func (p *Pods) GetPodsToRestart(ctx context.Context, preds []predicates.SidecarP
 			for _, predicate := range preds {
 				matched := predicate.Matches(pod)
 				if predicate.MustMatch() { // all of MustMatch predicates must evaluate to true
-					p.logger.Info(fmt.Sprintf("Pod %s matches MustMatch predicate %s", pod.Name, predicate.Name()))
+					//p.logger.Info(fmt.Sprintf("Pod %s matches MustMatch predicate %s", pod.Name, predicate.Name()))
 					if !matched {
 						requiredMatched = false
 						break
 					}
 				} else if !optionalMatched && matched { // at least one optional predicate must evaluate to true
-					p.logger.Info(fmt.Sprintf("Pod %s matches not MustMatch predicate %s", pod.Name, predicate.Name()))
+					//p.logger.Info(fmt.Sprintf("Pod %s matches not MustMatch predicate %s", pod.Name, predicate.Name()))
 					optionalMatched = true
 				}
 			}
@@ -76,7 +78,8 @@ func (p *Pods) GetPodsToRestart(ctx context.Context, preds []predicates.SidecarP
 				break
 			}
 		}
-		podsToRestart.Continue = podsWithSidecar.Continue
+		//podsToRestart.Continue = podsWithSidecar.Continue
+		p.continueToken = podsWithSidecar.Continue
 		while = len(podsToRestart.Items) < limits.PodsToRestartLimit && podsToRestart.Continue != ""
 	}
 
