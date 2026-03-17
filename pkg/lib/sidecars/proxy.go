@@ -79,11 +79,11 @@ func (p *ProxyRestart) RestartProxies(
 		enableDNSProxyingPredicate,
 	}
 
-	err = p.restartKymaProxies(ctx, predicates)
-	if err != nil {
-		p.logger.Error(err, "Failed to restart Kyma proxies")
-		return []restart.Warning{}, false, err
-	}
+	//err = p.restartKymaProxies(ctx, predicates)
+	//if err != nil {
+	//	p.logger.Error(err, "Failed to restart Kyma proxies")
+	//	return []restart.Warning{}, false, err
+	//}
 
 	warnings, hasMorePodsToRestart, err := p.restartCustomerProxies(ctx, predicates)
 	if err != nil {

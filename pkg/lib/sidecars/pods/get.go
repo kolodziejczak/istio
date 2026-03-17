@@ -34,8 +34,8 @@ type Getter interface {
 }
 
 type Pods struct {
-	k8sClient client.Client
-	logger    *logr.Logger
+	k8sClient     client.Client
+	logger        *logr.Logger
 	continueToken string
 }
 
@@ -78,9 +78,8 @@ func (p *Pods) GetPodsToRestart(ctx context.Context, preds []predicates.SidecarP
 				break
 			}
 		}
-		//podsToRestart.Continue = podsWithSidecar.Continue
 		p.continueToken = podsWithSidecar.Continue
-		while = len(podsToRestart.Items) < limits.PodsToRestartLimit && podsToRestart.Continue != ""
+		while = len(podsToRestart.Items) < limits.PodsToRestartLimit && p.continueToken != ""
 	}
 
 	if len(podsToRestart.Items) > 0 {
@@ -89,6 +88,7 @@ func (p *Pods) GetPodsToRestart(ctx context.Context, preds []predicates.SidecarP
 		p.logger.Info("No pods to restart with matching predicates")
 	}
 
+	podsToRestart.Continue = p.continueToken
 	return podsToRestart, nil
 }
 

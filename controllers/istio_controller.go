@@ -21,8 +21,9 @@ import (
 	"fmt"
 	"time"
 
-	istiocrmetrics "github.com/kyma-project/istio/operator/internal/metrics"
 	"github.com/pkg/errors"
+
+	istiocrmetrics "github.com/kyma-project/istio/operator/internal/metrics"
 
 	"github.com/kyma-project/istio/operator/internal/images"
 	"github.com/kyma-project/istio/operator/internal/resources"
@@ -61,7 +62,7 @@ import (
 
 const (
 	namespace                        = "kyma-system"
-	reconciliationRequeueTimeError   = 1 * time.Minute
+	reconciliationRequeueTimeError   = 1 * time.Second
 	reconciliationRequeueTimeWarning = 1 * time.Hour
 )
 
@@ -74,7 +75,14 @@ func NewController(mgr manager.Manager, reconciliationInterval time.Duration, cr
 	actionRestarter := restart.NewActionRestarter(mgr.GetClient(), &logger)
 	restarters := []restarter.Restarter{
 		restarter.NewIngressGatewayRestarter(mgr.GetClient(), []predicates.IngressGatewayPredicate{}, statusHandler),
-		restarter.NewSidecarsRestarter(mgr.GetLogger(), mgr.GetClient(), &merger, sidecars.NewProxyRestarter(mgr.GetClient(), podsLister, actionRestarter, &logger), statusHandler, istioImages),
+		restarter.NewSidecarsRestarter(
+			mgr.GetLogger(),
+			mgr.GetClient(),
+			&merger,
+			sidecars.NewProxyRestarter(mgr.GetClient(), podsLister, actionRestarter, &logger),
+			statusHandler,
+			istioImages,
+		),
 		restarter.NewForNetworkPolicy(mgr.GetClient(), statusHandler),
 	}
 	userResources := resources.NewUserResources(mgr.GetClient())
