@@ -62,7 +62,7 @@ import (
 
 const (
 	namespace                        = "kyma-system"
-	reconciliationRequeueTimeError   = 1 * time.Second
+	reconciliationRequeueTimeError   = 1 * time.Minute
 	reconciliationRequeueTimeWarning = 1 * time.Hour
 )
 
@@ -232,7 +232,7 @@ func (r *IstioReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, err
 	} else if requeue {
 		r.statusHandler.SetCondition(&istioCR, operatorv1alpha2.NewReasonWithMessage(operatorv1alpha2.ConditionReasonReconcileRequeued))
-		return r.requeueReconciliationRestartNotFinished(ctx, &istioCR, reconciliationRequeueTime)
+		return r.requeueReconciliationRestartNotFinished(ctx, &istioCR, 3*time.Second)
 	}
 
 	userResErr := r.userResources.DetectUserCreatedEfOnIngress(ctx)

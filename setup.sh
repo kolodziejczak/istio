@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 
+# remove all stale replicasets
+# kubectl get rs -n test --no-headers | awk '$2 == 0 && $4 == 0 {print $1}' | xargs -r kubectl delete rs -n test
+
 # KWOK repository
 KWOK_REPO=kubernetes-sigs/kwok
 # Get latest
@@ -47,7 +50,7 @@ for i in {1..60}; do
         containerRuntimeVersion: ""
         kernelVersion: ""
         kubeProxyVersion: "fake"
-        kubeletVersion: v1.35.0
+        kubeletVersion: v1.34.3
         machineID: ""
         operatingSystem: linux
         osImage: "Debian GNU/Linux 12 (bookworm)"
@@ -56,6 +59,7 @@ for i in {1..60}; do
 EOF
 done
 
+kubectl create ns test
 kubectl label ns test istio-injection=enabled --overwrite
 
 echo "create $deployments deployments"

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"strings"
 
 	"github.com/kyma-project/istio/operator/api/v1alpha2"
@@ -21,7 +20,7 @@ import (
 
 const (
 	podsToRestartLimit = 30
-	podsToListLimit    = 100
+	podsToListLimit    = 30
 )
 
 type ProxyRestarter interface {
@@ -79,11 +78,11 @@ func (p *ProxyRestart) RestartProxies(
 		enableDNSProxyingPredicate,
 	}
 
-	//err = p.restartKymaProxies(ctx, predicates)
-	//if err != nil {
-	//	p.logger.Error(err, "Failed to restart Kyma proxies")
-	//	return []restart.Warning{}, false, err
-	//}
+	err = p.restartKymaProxies(ctx, predicates)
+	if err != nil {
+		p.logger.Error(err, "Failed to restart Kyma proxies")
+		return []restart.Warning{}, false, err
+	}
 
 	warnings, hasMorePodsToRestart, err := p.restartCustomerProxies(ctx, predicates)
 	if err != nil {
@@ -125,7 +124,7 @@ func (p *ProxyRestart) RestartWithPredicates(
 
 func (p *ProxyRestart) restartKymaProxies(ctx context.Context, preds []predicates.SidecarProxyPredicate) error {
 	preds = append(preds, predicates.NewKymaWorkloadRestartPredicate())
-	limits := pods.NewPodsRestartLimits(math.MaxInt, math.MaxInt)
+	limits := pods.NewPodsRestartLimits(podsToRestartLimit, podsToListLimit)
 
 	warnings, _, err := p.RestartWithPredicates(ctx, preds, limits, true)
 	if err != nil {
@@ -141,6 +140,25 @@ func (p *ProxyRestart) restartKymaProxies(ctx context.Context, preds []predicate
 
 	p.logger.Info("Kyma proxy restart completed")
 	return nil
+}
+
+func (p *ProxyRestart) restartCustomerProxies(ctx context.Context, preds []predicates.SidecarProxyPredicate) ([]restart.Warning, bool, error) {
+	preds = append(preds, predicates.NewCustomerWorkloadRestartPredicate())
+	limits := pods.NewPodsRestartLimits(podsToRestartLimit, podsToListLimit)
+
+	warnings, hasMorePodsToRestart, err := p.RestartWithPredicates(ctx, preds, limits, false)
+	if err != nil {
+		p.logger.Error(err, "Failed to restart Customer proxies")
+		return warnings, false, err
+	}
+
+	if !hasMorePodsToRestart {
+		p.logger.Info("Customer proxy restart completed")
+	} else {
+		p.logger.Info("Customer proxy restart only partially completed")
+	}
+
+	return warnings, hasMorePodsToRestart, nil
 }
 
 func BuildWarningMessage(warnings []restart.Warning, logger *logr.Logger) string {
@@ -162,23 +180,4 @@ func BuildWarningMessage(warnings []restart.Warning, logger *logr.Logger) string
 		}
 	}
 	return warningMessage
-}
-
-func (p *ProxyRestart) restartCustomerProxies(ctx context.Context, preds []predicates.SidecarProxyPredicate) ([]restart.Warning, bool, error) {
-	preds = append(preds, predicates.NewCustomerWorkloadRestartPredicate())
-	limits := pods.NewPodsRestartLimits(podsToRestartLimit, podsToListLimit)
-
-	warnings, hasMorePodsToRestart, err := p.RestartWithPredicates(ctx, preds, limits, false)
-	if err != nil {
-		p.logger.Error(err, "Failed to restart Customer proxies")
-		return warnings, false, err
-	}
-
-	if !hasMorePodsToRestart {
-		p.logger.Info("Customer proxy restart completed")
-	} else {
-		p.logger.Info("Customer proxy restart only partially completed")
-	}
-
-	return warnings, hasMorePodsToRestart, nil
 }
