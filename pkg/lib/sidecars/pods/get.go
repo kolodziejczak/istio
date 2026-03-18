@@ -5,6 +5,7 @@ import (
 
 	"github.com/go-logr/logr"
 	v1 "k8s.io/api/core/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/fields"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -46,40 +47,31 @@ func NewPods(k8sClient client.Client, logger *logr.Logger) *Pods {
 	}
 }
 
-//nolint:gocognit // cognitive complexity 29 of func `(*Pods).GetPodsToRestart` is high (> 20) TODO refactor
 func (p *Pods) GetPodsToRestart(ctx context.Context, preds []predicates.SidecarProxyPredicate, limits *RestartLimits) (*v1.PodList, error) {
+	// Page through sidecar pods until we find pods to restart or exhaust all pages.
+	// Once a non-empty set of pods to restart is found, the continue token is persisted on
+	// RestartLimits so that the next reconciliation resumes from that position.
+	// If no pods are found across all pages, the token is reset to avoid an endless requeue.
 	podsToRestart := &v1.PodList{}
-	for while := true; while; {
-		// TODO: here we need to pass lower limit in case of kyma workloads restart as its math.MaxInt which makes the bellow function to get all Pods in the cluster and potentially OOM killed
+
+	for {
 		podsWithSidecar, err := getSidecarPods(ctx, p.k8sClient, p.logger, limits.PodsToListLimit, limits.ContinueToken)
 		if err != nil {
+			if k8serrors.IsGone(err) {
+				// The continue token expired (410 Gone). Reset and restart the scan from the beginning.
+				p.logger.Info("Continue token expired, restarting pod scan from the beginning")
+				limits.ContinueToken = ""
+				continue
+			}
 			return nil, err
 		}
-		for _, pod := range podsWithSidecar.Items {
-			optionalMatched := false
-			requiredMatched := true
-			for _, predicate := range preds {
-				matched := predicate.Matches(pod)
-				if predicate.MustMatch() { // all of MustMatch predicates must evaluate to true
-					//p.logger.Info(fmt.Sprintf("Pod %s matches MustMatch predicate %s", pod.Name, predicate.Name()))
-					if !matched {
-						requiredMatched = false
-						break
-					}
-				} else if !optionalMatched && matched { // at least one optional predicate must evaluate to true
-					//p.logger.Info(fmt.Sprintf("Pod %s matches not MustMatch predicate %s", pod.Name, predicate.Name()))
-					optionalMatched = true
-				}
-			}
-			if requiredMatched && optionalMatched {
-				podsToRestart.Items = append(podsToRestart.Items, pod)
-			}
-			if len(podsToRestart.Items) >= limits.PodsToRestartLimit {
-				break
-			}
-		}
+
+		podsToRestart.Items = collectMatchingPods(podsWithSidecar.Items, preds, limits.PodsToRestartLimit)
 		limits.ContinueToken = podsWithSidecar.Continue
-		while = len(podsToRestart.Items) < limits.PodsToRestartLimit && limits.ContinueToken != ""
+
+		if len(podsToRestart.Items) > 0 || limits.ContinueToken == "" {
+			break
+		}
 	}
 
 	if len(podsToRestart.Items) > 0 {
@@ -90,6 +82,38 @@ func (p *Pods) GetPodsToRestart(ctx context.Context, preds []predicates.SidecarP
 
 	podsToRestart.Continue = limits.ContinueToken
 	return podsToRestart, nil
+}
+
+// matchesPredicate returns true if the pod satisfies all MustMatch predicates and at least one optional predicate.
+func matchesPredicate(pod v1.Pod, preds []predicates.SidecarProxyPredicate) bool {
+	optionalMatched := false
+	for _, predicate := range preds {
+		matched := predicate.Matches(pod)
+		if predicate.MustMatch() {
+			// All MustMatch predicates must evaluate to true.
+			if !matched {
+				return false
+			}
+		} else if matched {
+			// At least one optional predicate must evaluate to true.
+			optionalMatched = true
+		}
+	}
+	return optionalMatched
+}
+
+// collectMatchingPods returns up to limit pods from candidates that satisfy the given predicates.
+func collectMatchingPods(candidates []v1.Pod, preds []predicates.SidecarProxyPredicate, limit int) []v1.Pod {
+	var matched []v1.Pod
+	for _, pod := range candidates {
+		if matchesPredicate(pod, preds) {
+			matched = append(matched, pod)
+		}
+		if len(matched) >= limit {
+			break
+		}
+	}
+	return matched
 }
 
 func (p *Pods) GetAllInjectedPods(ctx context.Context) (*v1.PodList, error) {

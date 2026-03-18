@@ -251,27 +251,6 @@ var _ = Describe("GetPodsToRestart", func() {
 					Expect(podList.Continue).To(Equal("continue"))
 				},
 			},
-			{
-				name: "Should respect limit and use continue token to obtain rest of pods when listing pods",
-				c: NewFakeClientWithLimit(createClientSet(
-					helpers.NewSidecarPodBuilder().
-						SetName("changedSidecarPod1").
-						SetSidecarImageRepository("istio/different-proxy").
-						Build(),
-					helpers.NewSidecarPodBuilder().Build(),
-					helpers.NewSidecarPodBuilder().
-						SetName("changedSidecarPod2").
-						SetSidecarImageRepository("istio/different-proxy").
-						Build(),
-				), 1),
-				limits: pods.NewPodsRestartLimits(2, 1),
-				assertFunc: func(podList *v1.PodList) {
-					Expect(podList.Items).To(HaveLen(2))
-					Expect(podList.Items[0].Name).To(Equal("changedSidecarPod1"))
-					Expect(podList.Items[1].Name).To(Equal("changedSidecarPod2"))
-					Expect(podList.Continue).To(BeEmpty())
-				},
-			},
 		}
 		for _, tt := range tests {
 			It(tt.name, func() {
