@@ -232,7 +232,7 @@ func (r *IstioReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, err
 	} else if requeue {
 		r.statusHandler.SetCondition(&istioCR, operatorv1alpha2.NewReasonWithMessage(operatorv1alpha2.ConditionReasonReconcileRequeued))
-		return r.requeueReconciliationRestartNotFinished(ctx, &istioCR, 1*time.Minute)
+		return r.requeueReconciliationRestartNotFinished(ctx, &istioCR, 1*time.Second)
 	}
 
 	userResErr := r.userResources.DetectUserCreatedEfOnIngress(ctx)

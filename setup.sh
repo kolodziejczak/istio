@@ -63,7 +63,7 @@ kubectl create ns test
 kubectl label ns test istio-injection=enabled --overwrite
 
 echo "create $deployments deployments"
-for i in {1..1500}; do
+for i in {1..150}; do
 kubectl apply -f - <<EOF
 apiVersion: apps/v1
 kind: Deployment
