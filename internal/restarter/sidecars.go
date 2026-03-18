@@ -86,6 +86,18 @@ func (s *SidecarRestarter) Restart(ctx context.Context, istioCR *v1alpha2.Istio)
 		return describederrors.NewDescribedError(err, "Verifying Pod versions in istio-system namespace failed"), false
 	}
 
+	restartRequired, err := configuration.ProxySidecarRestartRequired(istioCR, istioImageVersion.Tag())
+	if err != nil {
+		s.Log.Error(err, "Failed to check if proxy sidecar restart is required")
+		s.StatusHandler.SetCondition(istioCR, v1alpha2.NewReasonWithMessage(v1alpha2.ConditionReasonProxySidecarRestartFailed))
+		return describederrors.NewDescribedError(err, errorDescription), false
+	}
+	if !restartRequired {
+		s.Log.Info("Proxy sidecar restart not required, skipping cluster scan")
+		s.StatusHandler.SetCondition(istioCR, v1alpha2.NewReasonWithMessage(v1alpha2.ConditionReasonProxySidecarRestartSucceeded))
+		return nil, false
+	}
+
 	expectedResources, err := istioCR.GetProxyResources(iop)
 	if err != nil {
 		s.Log.Error(err, "Failed to get Istio Proxy resources")
@@ -93,7 +105,7 @@ func (s *SidecarRestarter) Restart(ctx context.Context, istioCR *v1alpha2.Istio)
 		return describederrors.NewDescribedError(err, errorDescription), false
 	}
 
-	warnings, hasMorePods, err := s.ProxyRestarter.RestartProxies(ctx, expectedImage, expectedResources, istioCR)
+	warnings, _, err := s.ProxyRestarter.RestartProxies(ctx, expectedImage, expectedResources, istioCR)
 	if err != nil {
 		s.Log.Error(err, "Failed to reset proxy")
 		s.StatusHandler.SetCondition(istioCR, v1alpha2.NewReasonWithMessage(v1alpha2.ConditionReasonProxySidecarRestartFailed))
@@ -109,18 +121,13 @@ func (s *SidecarRestarter) Restart(ctx context.Context, istioCR *v1alpha2.Istio)
 		return warningErr, false
 	}
 
-	if !hasMorePods {
-		// Update lastAppliedConfiguration only when all sidecars have been restarted
-		// to prevent unnecessary restarts if reconciliation requeues early
-		if err := s.updateLastAppliedConfiguration(ctx, istioCR); err != nil {
-			s.Log.Error(err, "Failed to update lastAppliedConfiguration after sidecar restart")
-		}
-		s.StatusHandler.SetCondition(istioCR, v1alpha2.NewReasonWithMessage(v1alpha2.ConditionReasonProxySidecarRestartSucceeded))
-	} else {
-		s.StatusHandler.SetCondition(istioCR, v1alpha2.NewReasonWithMessage(v1alpha2.ConditionReasonProxySidecarRestartPartiallySucceeded))
+	// All sidecars have been processed within this reconciliation; update the last-applied configuration.
+	if err := s.updateLastAppliedConfiguration(ctx, istioCR); err != nil {
+		s.Log.Error(err, "Failed to update lastAppliedConfiguration after sidecar restart")
 	}
+	s.StatusHandler.SetCondition(istioCR, v1alpha2.NewReasonWithMessage(v1alpha2.ConditionReasonProxySidecarRestartSucceeded))
 
-	return nil, hasMorePods
+	return nil, false
 }
 
 func (s *SidecarRestarter) updateLastAppliedConfiguration(ctx context.Context, istioCR *v1alpha2.Istio) error {

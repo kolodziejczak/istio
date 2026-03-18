@@ -3,10 +3,13 @@ package sidecars_test
 import (
 	"context"
 	"errors"
-	"math"
 	"testing"
 
 	"github.com/go-logr/logr"
+	. "github.com/onsi/ginkgo/v2"
+	ginkgotypes "github.com/onsi/ginkgo/v2/types"
+	. "github.com/onsi/gomega"
+
 	"github.com/kyma-project/istio/operator/internal/images"
 	"github.com/kyma-project/istio/operator/internal/restarter/predicates"
 	"github.com/kyma-project/istio/operator/internal/tests"
@@ -15,9 +18,6 @@ import (
 	"github.com/kyma-project/istio/operator/pkg/lib/sidecars/pods"
 	"github.com/kyma-project/istio/operator/pkg/lib/sidecars/restart"
 	"github.com/kyma-project/istio/operator/pkg/lib/sidecars/test/helpers"
-	. "github.com/onsi/ginkgo/v2"
-	ginkgotypes "github.com/onsi/ginkgo/v2/types"
-	. "github.com/onsi/gomega"
 
 	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
@@ -111,10 +111,8 @@ var _ = Describe("RestartProxies", func() {
 		Expect(podsListerMock.Predicates[1][5]).To(BeAssignableToTypeOf(&predicates.CustomerWorkloadRestartPredicate{}))
 
 		Expect(podsListerMock.Limits).To(HaveLen(2))
-		Expect(podsListerMock.Limits[0].PodsToRestartLimit).To(Equal(math.MaxInt))
-		Expect(podsListerMock.Limits[0].PodsToListLimit).To(Equal(math.MaxInt))
-		Expect(podsListerMock.Limits[1].PodsToRestartLimit).To(Equal(30))
-		Expect(podsListerMock.Limits[1].PodsToListLimit).To(Equal(100))
+		Expect(podsListerMock.Limits[0].PodsPerPage).To(Equal(30))
+		Expect(podsListerMock.Limits[1].PodsPerPage).To(Equal(30))
 	})
 
 	It("should return error if compatibility predicate creation fails", func() {
@@ -244,7 +242,7 @@ var _ = Describe("RestartWithPredicates", func() {
 		preds := []predicates.SidecarProxyPredicate{
 			predicates.NewImageResourcesPredicate(images.Image{Registry: "istio", Name: "proxyv2", Tag: "1.1.0"}, helpers.DefaultSidecarResources),
 		}
-		limits := pods.NewPodsRestartLimits(10, 10)
+		limits := pods.NewPodsRestartLimits(10)
 
 		// when
 		podsLister := pods.NewPods(c, &logger)
@@ -270,7 +268,7 @@ var _ = Describe("RestartWithPredicates", func() {
 		preds := []predicates.SidecarProxyPredicate{
 			predicates.NewImageResourcesPredicate(images.Image{Registry: "istio", Name: "proxyv2", Tag: "1.1.0"}, helpers.DefaultSidecarResources),
 		}
-		limits := pods.NewPodsRestartLimits(2, 2)
+		limits := pods.NewPodsRestartLimits(2)
 
 		// when
 		podsLister := pods.NewPods(c, &logger)
@@ -292,7 +290,7 @@ var _ = Describe("RestartWithPredicates", func() {
 		preds := []predicates.SidecarProxyPredicate{
 			predicates.NewImageResourcesPredicate(images.Image{Registry: "istio", Name: "proxyv2", Tag: "1.1.0"}, helpers.DefaultSidecarResources),
 		}
-		limits := pods.NewPodsRestartLimits(2, 2)
+		limits := pods.NewPodsRestartLimits(2)
 
 		// when
 		c := fakeClient()
@@ -321,7 +319,7 @@ var _ = Describe("RestartWithPredicates", func() {
 		preds := []predicates.SidecarProxyPredicate{
 			predicates.NewImageResourcesPredicate(images.Image{Registry: "istio", Name: "proxyv2", Tag: "1.1.0"}, helpers.DefaultSidecarResources),
 		}
-		limits := pods.NewPodsRestartLimits(2, 2)
+		limits := pods.NewPodsRestartLimits(2)
 
 		// when
 		failClient := &shouldFailClient{c, false, true}
@@ -349,7 +347,7 @@ var _ = Describe("RestartWithPredicates", func() {
 		preds := []predicates.SidecarProxyPredicate{
 			predicates.NewImageResourcesPredicate(images.Image{Registry: "istio", Name: "proxyv2", Tag: "1.1.0"}, helpers.DefaultSidecarResources),
 		}
-		limits := pods.NewPodsRestartLimits(2, 2)
+		limits := pods.NewPodsRestartLimits(2)
 
 		// when
 		failClient := &shouldFailClient{c, false, true}
@@ -419,7 +417,9 @@ var _ = Describe("BuildWarningMessage", func() {
 		warningMessage := sidecars.BuildWarningMessage(warnings, &logger)
 
 		// then
-		Expect(warningMessage).To(ContainSubstring("The sidecars of the following workloads could not be restarted: namespace1/pod1, namespace2/pod2, namespace3/pod3, namespace4/pod4, namespace5/pod5 and 1 additional workload(s)"))
+		Expect(
+			warningMessage,
+		).To(ContainSubstring("The sidecars of the following workloads could not be restarted: namespace1/pod1, namespace2/pod2, namespace3/pod3, namespace4/pod4, namespace5/pod5 and 1 additional workload(s)"))
 	})
 
 	It("should log each warning message", func() {

@@ -18,15 +18,12 @@ const (
 )
 
 type RestartLimits struct {
-	PodsToRestartLimit int
-	PodsToListLimit    int
-	ContinueToken      string
+	PodsPerPage int
 }
 
-func NewPodsRestartLimits(restartLimit, listLimit int) *RestartLimits {
+func NewPodsRestartLimits(podsPerPage int) *RestartLimits {
 	return &RestartLimits{
-		PodsToRestartLimit: restartLimit,
-		PodsToListLimit:    listLimit,
+		PodsPerPage: podsPerPage,
 	}
 }
 
@@ -48,39 +45,37 @@ func NewPods(k8sClient client.Client, logger *logr.Logger) *Pods {
 }
 
 func (p *Pods) GetPodsToRestart(ctx context.Context, preds []predicates.SidecarProxyPredicate, limits *RestartLimits) (*v1.PodList, error) {
-	// Page through sidecar pods until we find pods to restart or exhaust all pages.
-	// Once a non-empty set of pods to restart is found, the continue token is persisted on
-	// RestartLimits so that the next reconciliation resumes from that position.
-	// If no pods are found across all pages, the token is reset to avoid an endless requeue.
+	// Page through all sidecar pods within a single reconciliation, collecting every matching pod.
+	// All pagination is handled internally so that continue tokens never span across
+	// reconciliation cycles (Kubernetes continue tokens expire after ~5 minutes).
 	podsToRestart := &v1.PodList{}
+	continueToken := ""
 
 	for {
-		podsWithSidecar, err := getSidecarPods(ctx, p.k8sClient, p.logger, limits.PodsToListLimit, limits.ContinueToken)
+		podsWithSidecar, err := getSidecarPods(ctx, p.k8sClient, p.logger, limits.PodsPerPage, continueToken)
 		if err != nil {
 			if k8serrors.IsGone(err) {
-				// The continue token expired (410 Gone). Reset and restart the scan from the beginning.
 				p.logger.Info("Continue token expired, restarting pod scan from the beginning")
-				limits.ContinueToken = ""
+				continueToken = ""
 				continue
 			}
 			return nil, err
 		}
 
-		podsToRestart.Items = collectMatchingPods(podsWithSidecar.Items, preds, limits.PodsToRestartLimit)
-		limits.ContinueToken = podsWithSidecar.Continue
+		podsToRestart.Items = append(podsToRestart.Items, collectMatchingPods(podsWithSidecar.Items, preds)...)
+		continueToken = podsWithSidecar.Continue
 
-		if len(podsToRestart.Items) > 0 || limits.ContinueToken == "" {
+		if continueToken == "" {
 			break
 		}
 	}
 
 	if len(podsToRestart.Items) > 0 {
-		p.logger.Info("Pods to restart", "number of pods", len(podsToRestart.Items), "has more pods", limits.ContinueToken != "")
+		p.logger.Info("Pods to restart", "number of pods", len(podsToRestart.Items))
 	} else {
 		p.logger.Info("No pods to restart with matching predicates")
 	}
 
-	podsToRestart.Continue = limits.ContinueToken
 	return podsToRestart, nil
 }
 
@@ -102,15 +97,12 @@ func matchesPredicate(pod v1.Pod, preds []predicates.SidecarProxyPredicate) bool
 	return optionalMatched
 }
 
-// collectMatchingPods returns up to limit pods from candidates that satisfy the given predicates.
-func collectMatchingPods(candidates []v1.Pod, preds []predicates.SidecarProxyPredicate, limit int) []v1.Pod {
+// collectMatchingPods returns all pods from candidates that satisfy the given predicates.
+func collectMatchingPods(candidates []v1.Pod, preds []predicates.SidecarProxyPredicate) []v1.Pod {
 	var matched []v1.Pod
 	for _, pod := range candidates {
 		if matchesPredicate(pod, preds) {
 			matched = append(matched, pod)
-		}
-		if len(matched) >= limit {
-			break
 		}
 	}
 	return matched

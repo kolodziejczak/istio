@@ -174,3 +174,38 @@ func UpdateLastAppliedProxyConfig(istioCR *v1alpha2.Istio) error {
 	istioCR.Annotations[labels.LastAppliedConfiguration] = string(config)
 	return nil
 }
+
+// ProxySidecarRestartRequired returns true when any proxy-restart-relevant field has changed
+// since the last successful sidecar reconciliation. It checks exactly the fields written by
+// UpdateLastAppliedProxyConfig: IstioTag, CompatibilityMode, and EnableDNSProxying.
+// When this returns false the caller can skip the entire cluster pod scan.
+func ProxySidecarRestartRequired(istioCR *v1alpha2.Istio, currentIstioTag string) (bool, error) {
+	lastApplied, err := GetLastAppliedConfiguration(istioCR)
+	if err != nil {
+		return true, err
+	}
+
+	if lastApplied.IstioTag != currentIstioTag {
+		return true, nil
+	}
+
+	if lastApplied.CompatibilityMode != istioCR.Spec.CompatibilityMode {
+		return true, nil
+	}
+
+	if !equalBoolPtr(lastApplied.Config.EnableDNSProxying, istioCR.Spec.Config.EnableDNSProxying) {
+		return true, nil
+	}
+
+	return false, nil
+}
+
+func equalBoolPtr(a, b *bool) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
+}
