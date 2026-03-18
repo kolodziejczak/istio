@@ -19,6 +19,7 @@ const (
 type RestartLimits struct {
 	PodsToRestartLimit int
 	PodsToListLimit    int
+	ContinueToken      string
 }
 
 func NewPodsRestartLimits(restartLimit, listLimit int) *RestartLimits {
@@ -34,9 +35,8 @@ type Getter interface {
 }
 
 type Pods struct {
-	k8sClient     client.Client
-	logger        *logr.Logger
-	continueToken string
+	k8sClient client.Client
+	logger    *logr.Logger
 }
 
 func NewPods(k8sClient client.Client, logger *logr.Logger) *Pods {
@@ -51,7 +51,7 @@ func (p *Pods) GetPodsToRestart(ctx context.Context, preds []predicates.SidecarP
 	podsToRestart := &v1.PodList{}
 	for while := true; while; {
 		// TODO: here we need to pass lower limit in case of kyma workloads restart as its math.MaxInt which makes the bellow function to get all Pods in the cluster and potentially OOM killed
-		podsWithSidecar, err := getSidecarPods(ctx, p.k8sClient, p.logger, limits.PodsToListLimit, p.continueToken)
+		podsWithSidecar, err := getSidecarPods(ctx, p.k8sClient, p.logger, limits.PodsToListLimit, limits.ContinueToken)
 		if err != nil {
 			return nil, err
 		}
@@ -78,17 +78,17 @@ func (p *Pods) GetPodsToRestart(ctx context.Context, preds []predicates.SidecarP
 				break
 			}
 		}
-		p.continueToken = podsWithSidecar.Continue
-		while = len(podsToRestart.Items) < limits.PodsToRestartLimit && p.continueToken != ""
+		limits.ContinueToken = podsWithSidecar.Continue
+		while = len(podsToRestart.Items) < limits.PodsToRestartLimit && limits.ContinueToken != ""
 	}
 
 	if len(podsToRestart.Items) > 0 {
-		p.logger.Info("Pods to restart", "number of pods", len(podsToRestart.Items), "has more pods", podsToRestart.Continue != "")
+		p.logger.Info("Pods to restart", "number of pods", len(podsToRestart.Items), "has more pods", limits.ContinueToken != "")
 	} else {
 		p.logger.Info("No pods to restart with matching predicates")
 	}
 
-	podsToRestart.Continue = p.continueToken
+	podsToRestart.Continue = limits.ContinueToken
 	return podsToRestart, nil
 }
 
